@@ -1,0 +1,3 @@
+# Drop extra PEM trust anchors (*.crt) here when building behind a TLS-inspecting proxy.
+# Certificates placed here are git-ignored; the directory itself is tracked so the Dockerfile
+# always has something to COPY.

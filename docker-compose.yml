@@ -1,0 +1,133 @@
+# exchange-core-lab — local development stack.
+#
+# Isolation notes (SPEC §1.2, §1.5):
+#   * `name:` pins a dedicated compose project, so nothing is shared with any other stack.
+#   * every service sits on a dedicated bridge network; `host` networking is never used.
+#   * host ports are deliberately non-default, so this stack cannot collide with another
+#     Postgres/Kafka/Grafana already running on the machine.
+#   * volumes are named and project-prefixed; no bind mount points outside this repository.
+name: exchange-core-lab
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: exchange-core-lab-postgres
+    environment:
+      POSTGRES_DB: exchange_core_lab
+      POSTGRES_USER: exchange_core
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_dev_only}
+    ports:
+      - "55432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U exchange_core -d exchange_core_lab"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - exchange-core-lab
+
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    container_name: exchange-core-lab-redpanda
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --default-log-level=info
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+      - --rpc-addr=redpanda:33145
+      - --advertise-rpc-addr=redpanda:33145
+    ports:
+      - "19092:19092"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -qE 'Healthy:.+true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - exchange-core-lab
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    image: exchange-core-lab/app:0.1.0-SNAPSHOT
+    container_name: exchange-core-lab-app
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-local_dev_only}
+      # Left explicit rather than implicit: this is the value the startup guard checks.
+      EXCHANGE_REST_BASE_URL: https://testnet.binance.vision
+      EXCHANGE_WS_BASE_URL: wss://stream.testnet.binance.vision:9443
+    ports:
+      - "18080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q '\"status\":\"UP\"' <&3"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks:
+      - exchange-core-lab
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: exchange-core-lab-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=24h
+    ports:
+      - "19090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - app
+    networks:
+      - exchange-core-lab
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: exchange-core-lab-grafana
+    environment:
+      # Local lab only. There is no authentication story in this project by design (SPEC §6).
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "13000:3000"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - exchange-core-lab
+
+networks:
+  exchange-core-lab:
+    name: exchange-core-lab-net
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redpanda-data:
+  prometheus-data:
+  grafana-data:

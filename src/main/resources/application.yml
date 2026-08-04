@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: exchange-core-lab
+  datasource:
+    # Defaults target the compose Postgres published on a non-default host port,
+    # so running the app from an IDE works without extra configuration.
+    url: jdbc:postgresql://localhost:55432/exchange_core_lab
+    username: exchange_core
+    password: local_dev_only
+    hikari:
+      connection-timeout: 3000
+      validation-timeout: 2000
+      maximum-pool-size: 10
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+server:
+  port: 8080
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      # SPEC §4 Phase 0 requires `/health`. Actuator is mounted at the root and only three
+      # endpoints are exposed; everything else (env, beans, heapdump, ...) stays unreachable.
+      base-path: /
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: exchange-core-lab
+
+exchange:
+  # SPEC §1.4: these two values are checked against a hard-coded testnet allowlist during
+  # environment preparation. A non-testnet value aborts startup; there is no override.
+  rest-base-url: https://testnet.binance.vision
+  ws-base-url: wss://stream.testnet.binance.vision:9443
+  connect-timeout: 3s
+  read-timeout: 10s
+
+logging:
+  level:
+    root: INFO
+    io.github.joyen09.exchangecore: DEBUG
