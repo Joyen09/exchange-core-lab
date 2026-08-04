@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://postgres:5432/exchange_core_lab
+
+logging:
+  level:
+    io.github.joyen09.exchangecore: INFO

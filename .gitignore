@@ -1,0 +1,37 @@
+# --- Build output -----------------------------------------------------------
+build/
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+out/
+bin/
+
+# --- Secrets (SPEC §1.3 — credential isolation) -----------------------------
+# Only .env.example (placeholders) is ever committed.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.jks
+config.local.*
+
+# --- Local-only compose overrides -------------------------------------------
+# Used to adapt the stack to a restricted sandbox; never part of the deliverable.
+docker-compose.override.yml
+docker/app/Dockerfile.local
+
+# --- IDE / OS ---------------------------------------------------------------
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- Tooling ----------------------------------------------------------------
+.claude/settings.local.json
+
+# Extra CA certificates are host-specific and never committed (see docker/app/ca-certificates).
+docker/app/ca-certificates/*.crt
