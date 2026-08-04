@@ -1,0 +1,15 @@
+apiVersion: 1
+
+# Dashboards land here in Phase 5 (SPEC §4). The provider is wired up now so that dropping a
+# JSON file into docker/grafana/dashboards/ is all that will be required.
+providers:
+  - name: exchange-core-lab
+    orgId: 1
+    folder: exchange-core-lab
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
+      foldersFromFilesStructure: false
