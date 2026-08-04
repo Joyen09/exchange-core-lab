@@ -69,6 +69,25 @@ directly — with an unreachable database and a mainnet endpoint, the failure mu
 cause chain must contain no bean creation failure and no connection attempt. It was verified to fail
 against the old registration before being kept.
 
+#### A correction to the correction
+
+The paragraph above originally implied that the replacement test was needed because the first one was
+fragile — that pointing it at a reachable database would have let the defect through. That was
+asserted rather than measured, and measuring it showed otherwise. Run against the broken registration
+*with* a database listening on the expected port, the first test still failed: `ExchangeProperties`
+throwing during context refresh puts a `BeansException` in the cause chain, which is exactly what it
+asserts must be absent. Its vacuity control also failed loudly, flagging that its premise no longer
+held.
+
+So the case for the newer assertion is narrower and more honest than first stated: it is better
+because it **needs no premise**, not because the older one would have missed anything. The older test
+reasons from what did not happen and depends on a fact recorded in a constant; the newer one counts
+context initialisations and bean instantiations directly. Both are kept.
+
+Recording this matters for the same reason the defect itself does. The temptation with a good
+find is to make the story tidier than the evidence — and a recorded claim that was never checked is
+how the original problem started.
+
 The general lesson is worth more than the fix: **an architectural claim that no test can distinguish
 from its opposite is a claim nobody is checking.** Two of the strongest tests in this repository —
 this one and the deferred-constraint commit test in ADR-0004 — exist because "the assertion passes"

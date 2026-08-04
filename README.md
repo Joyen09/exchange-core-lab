@@ -104,6 +104,13 @@ That constraint drove several decisions that would otherwise look excessive:
   interposed between this service and the venue.
 - **Credential hygiene.** `.env.example` holds placeholders only, and a test enforces that. Secrets
   arrive through the environment; nothing key-shaped is ever committed.
+- **Two layers that catch different callers.** Ledger postings are append-only by database trigger
+  *and* by revoked privilege, and the tests show these are not the same control wearing two hats. The
+  application connects as a non-superuser role, so it is stopped by `permission denied` and never
+  reaches the trigger. Anyone holding the owner credentials — a superuser, who bypasses privilege
+  checks entirely — is stopped by the trigger and never reaches the privilege check. Remove either
+  layer and one of those callers gets through. That is what "defence in depth" is supposed to mean,
+  and it is worth having a case where it can be demonstrated rather than asserted.
 
 Pointing the service at a non-allowlisted endpoint produces this and exit code 1:
 
@@ -187,6 +194,71 @@ Several tests are written to fail for the right reason rather than merely to pas
 - **Property-based.** 1000 randomly generated entries, asserting the ledger still balances after
   each (jqwik).
 
+## The most useful bug in this repository
+
+The startup guard described above — the one that refuses any non-testnet endpoint *before the
+application exists* — **did not run at all for the whole of Phase 0**.
+
+It was registered in `META-INF/spring/org.springframework.boot.env.EnvironmentPostProcessor.imports`.
+Spring Boot does not read `.imports` files for that type; that mechanism is for auto-configuration
+classes. The post-processor was simply never loaded. What actually rejected mainnet endpoints was a
+constructor check on `ExchangeProperties` — a bean, created during context refresh — which is
+precisely the late-failing design [ADR-0001](docs/adr/0001-technology-choices.md) records as
+considered and **rejected**.
+
+### Why it stayed hidden
+
+Every observable symptom was correct.
+
+| What you could observe | What it implied | What was actually happening |
+|---|---|---|
+| the process refused to start | the guard rejected the endpoint | a bean constructor did, much later |
+| a clear banner named the offending property | the guard's failure analyzer ran | it ran — on an exception thrown from a bean |
+| the container exited 1 | fail-fast worked | it did, after the data source had been built |
+| CI was green | the behaviour was covered by tests | the tests only asked *whether* startup failed |
+
+There was nothing to notice. The disguise held until Phase 1 added the ledger, which changed bean
+creation order so that a database connection failure started winning the race — and the guard's
+exception vanished from the output.
+
+### The distinction
+
+> The tests asserted **that** startup failed.
+> Nothing asserted **where** it failed.
+> Those are two different claims, and only one of them was true.
+
+A test that asserts an outcome will happily accept any mechanism that produces that outcome,
+including the one the design explicitly ruled out. The stronger the outcome looks, the less anyone
+thinks to check the mechanism.
+
+### What changed
+
+Registration moved to `META-INF/spring.factories`, and the assertions now measure the proposition
+instead of a symptom:
+
+- `GuardRunsBeforeAnyBeanIsCreatedTest` records lifecycle events and counts bean instantiations,
+  then asserts **no context was ever initialised and not one bean was instantiated**. It was run
+  against the original broken registration to confirm it fails there — an assertion never observed
+  failing is not yet known to work.
+- Its companion asserts the recorder *does* observe context initialisation for an allowed endpoint,
+  because a recorder that silently records nothing would make the whole thing unfalsifiable.
+
+The same habit shows up in the ledger tests, which were written after this: the zero-sum test
+commits for real because a deferred constraint never fires in a rolled-back transaction, and the
+lock-ordering test asserts statement order rather than outcome because the twenty-thread version
+passes on reversed code whenever the scheduler is kind. Each carries a deliberate companion whose
+job is to prove the main assertion can fail.
+
+### The general form
+
+**An architectural claim that no test can distinguish from its opposite is a claim nobody is
+checking.**
+
+The habit that follows is cheap: for every test, ask what change to the production code would make
+it fail. If the answer is "nothing I can think of", it is documentation wearing a test's clothes —
+and documentation that reports itself as passing is worse than none, because it ends an
+investigation that should have continued.
+
 ## Development environment notes
 
 The compose file references standard public image names (`postgres:16-alpine`,
@@ -205,6 +277,9 @@ Two accommodations exist for restricted networks, neither of which changes the d
   with `PKIX path building failed`. Certificates placed there are git-ignored.
 
 ## Architecture decisions
+
+The correction in ADR-0001 is the write-up of
+[the bug described above](#the-most-useful-bug-in-this-repository).
 
 - [ADR-0001 — Technology choices](docs/adr/0001-technology-choices.md)
 - [ADR-0002 — Modular monolith over microservices](docs/adr/0002-modular-monolith.md)
