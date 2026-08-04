@@ -169,6 +169,8 @@ Two accommodations exist for restricted networks, neither of which changes the d
 - [ADR-0001 — Technology choices](docs/adr/0001-technology-choices.md)
 - [ADR-0002 — Modular monolith over microservices](docs/adr/0002-modular-monolith.md)
 - [ADR-0003 — Guard the exchange namespace, not a list of properties](docs/adr/0003-namespace-wide-endpoint-guard.md)
+- [ADR-0004 — Enforcing the zero-sum invariant](docs/adr/0004-zero-sum-enforcement.md)
+- [ADR-0005 — Concurrency control for derived balances](docs/adr/0005-balance-concurrency-control.md)
 
 ## Roadmap
 
