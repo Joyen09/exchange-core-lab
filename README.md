@@ -80,9 +80,14 @@ on your machine.
 This repository exists alongside a separate live trading system that must never be affected by it.
 That constraint drove several decisions that would otherwise look excessive:
 
-- **Testnet allowlist, enforced at startup.** `exchange.rest-base-url` and `exchange.ws-base-url`
-  are checked against a compile-time constant set of Binance Spot Testnet hosts. Anything else
-  aborts the process before a single bean — including the data source — is created.
+- **Testnet allowlist, enforced at startup.** Every endpoint under `exchange.*` is checked against a
+  compile-time constant set of Binance Spot Testnet hosts. Anything else aborts the process before a
+  single bean — including the data source — is created.
+- **Coverage by namespace, not by list.** The guard verifies any property in the exchange namespace
+  whose name or value carries a URL, so an endpoint added in a later phase is guarded on the day it
+  is introduced rather than when someone remembers. A reflection-driven test generates a case per
+  declared endpoint property, so adding one adds its own test — see
+  [ADR-0003](docs/adr/0003-namespace-wide-endpoint-guard.md).
 - **No override.** There is no property, profile, environment variable, or build flag that relaxes
   the check. `MainnetStartupFailsTest` asserts this by throwing plausible back-door flags at the
   application and confirming it still refuses to start. `NoOverrideSwitchTest` scans the repository
@@ -91,6 +96,9 @@ That constraint drove several decisions that would otherwise look excessive:
   `contains` or `endsWith`, which would accept `testnet.binance.vision.example.com`, a mainnet URL
   with `testnet` in its query string, or `https://testnet.binance.vision@somewhere-else/`. All of
   those are covered by tests.
+- **One normalisation only: ASCII case folding.** Punycode labels, hosts with a trailing root dot,
+  percent-encoded separators, and Unicode homoglyphs (Cyrillic `е` in `tеstnet`) are all rejected
+  rather than normalised — folding could only ever widen what matches.
 - **TLS only.** Plaintext `http`/`ws` schemes are refused, so a transparent proxy cannot be quietly
   interposed between this service and the venue.
 - **Credential hygiene.** `.env.example` holds placeholders only, and a test enforces that. Secrets
@@ -160,6 +168,7 @@ Two accommodations exist for restricted networks, neither of which changes the d
 
 - [ADR-0001 — Technology choices](docs/adr/0001-technology-choices.md)
 - [ADR-0002 — Modular monolith over microservices](docs/adr/0002-modular-monolith.md)
+- [ADR-0003 — Guard the exchange namespace, not a list of properties](docs/adr/0003-namespace-wide-endpoint-guard.md)
 
 ## Roadmap
 
@@ -189,4 +198,15 @@ Honest list, expanded as the project grows:
 7. **Local development only.** No Kubernetes manifests, no deployment automation, no remote host.
 8. **Phase 0 has no business behaviour yet.** The stack starts, migrates, reports health, and
    refuses unsafe endpoints — that is the entirety of what is implemented today.
+9. **The isolation scanner is only as fresh as the build's input tracking.** `NoOverrideSwitchTest`
+   reads the working tree, which Gradle does not treat as a test input by default — so editing a
+   scanned file and re-running the build could report an up-to-date pass without the scanner having
+   looked at the change. The `test` task now declares the working tree as an input, which fixes the
+   observed case, but the class of problem is inherent to a filesystem-reading test inside a cached
+   build: it can always be skipped rather than run. A pre-commit hook or an always-run verification
+   task would be a stronger place for this check than a unit test.
+10. **Endpoint detection is heuristic.** The guard recognises endpoints by property name or URL
+    scheme. A bare host with no scheme under a name that does not read like an endpoint would not be
+    checked; a typed `Endpoint` value that cannot be constructed without passing the allowlist is
+    the stronger design, deferred to Phase 3 (ADR-0003).
 
