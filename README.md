@@ -150,7 +150,11 @@ than by application code, because a rule a `psql` session can break is a convent
 |---|---|
 | every entry's postings sum to zero | deferred constraint trigger, checked at commit |
 | an entry has at least two postings | deferred constraint trigger — the zero-sum trigger fires per posting row, so an entry with none balances vacuously |
-| postings are append-only | immediate trigger, plus revoked `UPDATE`/`DELETE` privileges |
+| postings are append-only | immediate trigger, plus `UPDATE`/`DELETE` revoked from the application role |
+
+The application connects as `exchange_core_app`, a non-superuser role that holds `SELECT`/`INSERT`
+on postings and nothing else; migrations run as the owner. That separation is what turns the revoked
+privileges into a control rather than catalogue decoration — a superuser would bypass them.
 
 Writes serialise on the account row, locked *before* the balance is read — see
 [ADR-0005](docs/adr/0005-balance-concurrency-control.md) for why that ordering is the whole design
@@ -247,10 +251,11 @@ Honest list, expanded as the project grows:
     display-only; it must never become an input to a write decision, and an ArchUnit rule keeps it
     unreachable from the write package. Summing postings is also O(n) in an account's history — the
     materialised view that fixes it is deferred to Phase 5 on purpose.
-11. **The revoked mutation privileges are inert in local development,** because the development role
-    is a PostgreSQL superuser and superusers bypass ACL checks. The append-only trigger is what
-    actually holds here; the revoke becomes operative in a deployment whose application role is not a
-    superuser. Both layers are kept, and a test asserts each of these facts.
+11. **The owner role can still bypass the revoked privileges,** because it is a PostgreSQL superuser
+    and superusers bypass ACL checks. The application connects as a separate non-superuser role, so
+    the revoke is a real control on that path — but anyone holding the owner credentials is stopped
+    only by the append-only trigger. Both layers are kept, and tests assert which one catches which
+    caller.
 12. **Endpoint detection is heuristic.** The guard recognises endpoints by property name or URL
     scheme. A bare host with no scheme under a name that does not read like an endpoint would not be
     checked; a typed `Endpoint` value that cannot be constructed without passing the allowlist is

@@ -27,28 +27,65 @@ final class LedgerTestDatabase {
             .withUsername("exchange_core")
             .withPassword("local_dev_only");
 
-    private static HikariDataSource dataSource;
+    static final String APPLICATION_ROLE = "exchange_core_app";
+    private static final String APPLICATION_PASSWORD = "local_dev_only";
+
+    private static HikariDataSource ownerDataSource;
+    private static HikariDataSource applicationDataSource;
 
     private LedgerTestDatabase() {}
 
-    static synchronized DataSource dataSource() {
-        if (dataSource == null) {
-            CONTAINER.start();
-            HikariConfig config = new HikariConfig();
-            config.setJdbcUrl(CONTAINER.getJdbcUrl());
-            config.setUsername(CONTAINER.getUsername());
-            config.setPassword(CONTAINER.getPassword());
-            // Comfortably above the twenty threads the acceptance criteria run, so the test measures
-            // lock contention rather than connection starvation.
-            config.setMaximumPoolSize(40);
-            dataSource = new HikariDataSource(config);
-            Flyway.configure().dataSource(dataSource).load().migrate();
+    private static synchronized void start() {
+        if (applicationDataSource != null) {
+            return;
         }
-        return dataSource;
+        CONTAINER.start();
+
+        // The owner: a superuser, used for migrations and test fixtures only — never for exercising
+        // the ledger, because a superuser bypasses every ACL and would make the privilege layer
+        // untestable.
+        ownerDataSource = pool(CONTAINER.getUsername(), CONTAINER.getPassword(), 8);
+
+        // In a deployment this role is created at cluster initialisation by
+        // docker/postgres/init/10-application-role.sh. Testcontainers has no init directory, so the
+        // same role is created here; V3 then grants it the privileges under test.
+        new JdbcTemplate(ownerDataSource)
+                .execute("CREATE ROLE %s LOGIN PASSWORD '%s'".formatted(APPLICATION_ROLE, APPLICATION_PASSWORD));
+
+        Flyway.configure().dataSource(ownerDataSource).load().migrate();
+
+        // Comfortably above the twenty threads the acceptance criteria run, so the test measures
+        // lock contention rather than connection starvation.
+        applicationDataSource = pool(APPLICATION_ROLE, APPLICATION_PASSWORD, 40);
+    }
+
+    private static HikariDataSource pool(String username, String password, int maximumPoolSize) {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl(CONTAINER.getJdbcUrl());
+        config.setUsername(username);
+        config.setPassword(password);
+        config.setMaximumPoolSize(maximumPoolSize);
+        return new HikariDataSource(config);
+    }
+
+    /** What the application itself uses: the restricted, non-superuser role. */
+    static DataSource dataSource() {
+        start();
+        return applicationDataSource;
+    }
+
+    /** Migrations and fixtures only. Everything the ledger does must work without this. */
+    static DataSource ownerDataSource() {
+        start();
+        return ownerDataSource;
     }
 
     static JdbcTemplate jdbc() {
         return new JdbcTemplate(dataSource());
+    }
+
+    static JdbcTemplate ownerJdbc() {
+        return new JdbcTemplate(ownerDataSource());
     }
 
     static PlatformTransactionManager transactionManager() {
@@ -77,8 +114,11 @@ final class LedgerTestDatabase {
         return new TransactionTemplate(transactionManager());
     }
 
-    /** TRUNCATE rather than DELETE: the postings table refuses DELETE by trigger and by privilege. */
+    /**
+     * TRUNCATE rather than DELETE: postings refuse DELETE by trigger and by privilege. It runs as the
+     * owner because the application role is not granted TRUNCATE either — which is the point.
+     */
     static void reset() {
-        jdbc().execute("TRUNCATE postings, entries, accounts CASCADE");
+        ownerJdbc().execute("TRUNCATE postings, entries, accounts CASCADE");
     }
 }

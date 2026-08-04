@@ -5,7 +5,9 @@ spring:
     # Defaults target the compose Postgres published on a non-default host port,
     # so running the app from an IDE works without extra configuration.
     url: jdbc:postgresql://localhost:55432/exchange_core_lab
-    username: exchange_core
+    # The application connects as a non-superuser role so the revoked UPDATE/DELETE grants on
+    # postings are an actual control rather than catalogue decoration (V3__application_role.sql).
+    username: exchange_core_app
     password: local_dev_only
     hikari:
       connection-timeout: 3000
@@ -14,6 +16,9 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+    # Migrations run as the owner: the application role cannot, and must not be able to, alter schema.
+    user: exchange_core
+    password: local_dev_only
 
 server:
   port: 8080

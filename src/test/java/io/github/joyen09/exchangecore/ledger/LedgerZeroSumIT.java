@@ -25,6 +25,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 class LedgerZeroSumIT {
 
     private final JdbcTemplate jdbc = LedgerTestDatabase.jdbc();
+    private final JdbcTemplate ownerJdbc = LedgerTestDatabase.ownerJdbc();
     private final TransactionTemplate transactions = LedgerTestDatabase.transactionTemplate();
     private final LedgerService ledger = LedgerTestDatabase.ledgerService();
 
@@ -127,45 +128,75 @@ class LedgerZeroSumIT {
     }
 
     @Test
-    @DisplayName("postings cannot be updated")
-    void postingsCannotBeUpdated() {
+    @DisplayName("the application role is refused UPDATE on postings by privilege, before any trigger runs")
+    void applicationRoleCannotUpdatePostings() {
         UUID postingId = writeBalancedEntry();
 
+        // Spring maps SQLSTATE 42501 (insufficient_privilege) to BadSqlGrammarException, which is a
+        // misleading name for a permission failure — the real reason is in the cause, so that is
+        // where the assertion looks.
         assertThatThrownBy(() -> jdbc.update("UPDATE postings SET amount = 1 WHERE id = ?", postingId))
-                .isInstanceOf(DataAccessException.class);
+                .isInstanceOf(DataAccessException.class)
+                .rootCause()
+                .hasMessageContaining("permission denied");
     }
 
     @Test
-    @DisplayName("postings cannot be deleted")
-    void postingsCannotBeDeleted() {
+    @DisplayName("the application role is refused DELETE on postings by privilege")
+    void applicationRoleCannotDeletePostings() {
         UUID postingId = writeBalancedEntry();
 
         assertThatThrownBy(() -> jdbc.update("DELETE FROM postings WHERE id = ?", postingId))
-                .isInstanceOf(DataAccessException.class);
+                .isInstanceOf(DataAccessException.class)
+                .rootCause()
+                .hasMessageContaining("permission denied");
     }
 
     @Test
-    @DisplayName("UPDATE and DELETE on postings are revoked in the catalogue")
+    @DisplayName("the owner, who has the privilege, is refused by the trigger instead")
+    void theOwnerIsStoppedByTheTriggerRatherThanByPrivilege() {
+        // The two layers catch different callers, which is why both exist. The application role never
+        // reaches the trigger; the owner never reaches the privilege check.
+        UUID postingId = writeBalancedEntry();
+
+        assertThatThrownBy(() -> ownerJdbc.update("UPDATE postings SET amount = 1 WHERE id = ?", postingId))
+                .isInstanceOf(DataAccessException.class)
+                .rootCause()
+                .hasMessageContaining("append-only");
+    }
+
+    @Test
+    @DisplayName("UPDATE and DELETE on postings are revoked for the application role")
     void mutationPrivilegesAreRevoked() {
-        // The second layer from ADR-0004: privileges survive ALTER TABLE ... DISABLE TRIGGER, so
-        // this is not redundant with the two tests above.
-        assertThat(grantedPrivileges()).contains("INSERT", "SELECT").doesNotContain("UPDATE", "DELETE");
+        assertThat(grantedPrivileges(jdbc)).contains("INSERT", "SELECT").doesNotContain("UPDATE", "DELETE");
+        assertThat(hasPrivilege(jdbc, "DELETE")).isFalse();
+        assertThat(hasPrivilege(jdbc, "INSERT")).isTrue();
+        assertThat(isSuperuser(jdbc)).isFalse();
     }
 
     @Test
-    @DisplayName("but the revoke is inert here, because the development role is a superuser")
-    void revokeIsInertForASuperuser() {
-        // Worth asserting rather than assuming. A superuser bypasses ACL checks entirely, so
-        // has_table_privilege still reports true even though the grant is gone from pg_class.relacl.
-        // In local development and in these tests the append-only *trigger* is therefore the control
-        // that actually holds; the revoke becomes operative in a deployment whose application role is
-        // not a superuser. Keeping both layers is the point — neither covers the other's gap.
-        assertThat(isSuperuser()).isTrue();
-        assertThat(hasPrivilege("DELETE")).isTrue();
+    @DisplayName("the owner bypasses the revoke entirely, which is why the application role exists")
+    void theOwnerBypassesTheRevoke() {
+        // Kept from before the application role was introduced, because it documents the reason for
+        // it. The owner's grant is gone from pg_class.relacl and has_table_privilege still answers
+        // true, because a superuser bypasses ACL checks. Against the owner the revoke is decoration;
+        // only a non-superuser role makes it a control.
+        assertThat(isSuperuser(ownerJdbc)).isTrue();
+        assertThat(grantedPrivileges(ownerJdbc)).doesNotContain("UPDATE", "DELETE");
+        assertThat(hasPrivilege(ownerJdbc, "DELETE")).isTrue();
     }
 
-    private java.util.List<String> grantedPrivileges() {
-        return jdbc.queryForList(
+    @Test
+    @DisplayName("the application role can still do everything the ledger needs")
+    void applicationRoleCanRunTheLedger() {
+        // Including the account row lock, which needs the UPDATE privilege even though nothing is
+        // updated — PostgreSQL treats FOR UPDATE as update-shaped. Granting less breaks the mutex.
+        assertThat(hasPrivilege(jdbc, "INSERT")).isTrue();
+        assertThatCode(this::writeBalancedEntry).doesNotThrowAnyException();
+    }
+
+    private java.util.List<String> grantedPrivileges(JdbcTemplate as) {
+        return as.queryForList(
                 """
                 SELECT privilege_type FROM information_schema.role_table_grants
                  WHERE table_name = 'postings' AND grantee = current_user
@@ -173,14 +204,14 @@ class LedgerZeroSumIT {
                 String.class);
     }
 
-    private boolean isSuperuser() {
-        return Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT rolsuper FROM pg_roles WHERE rolname = current_user", Boolean.class));
+    private boolean isSuperuser(JdbcTemplate as) {
+        return Boolean.TRUE.equals(
+                as.queryForObject("SELECT rolsuper FROM pg_roles WHERE rolname = current_user", Boolean.class));
     }
 
-    private boolean hasPrivilege(String privilege) {
+    private boolean hasPrivilege(JdbcTemplate as, String privilege) {
         return Boolean.TRUE.equals(
-                jdbc.queryForObject("SELECT has_table_privilege(current_user, 'postings', ?)", Boolean.class, privilege));
+                as.queryForObject("SELECT has_table_privilege(current_user, 'postings', ?)", Boolean.class, privilege));
     }
 
     private UUID writeBalancedEntry() {

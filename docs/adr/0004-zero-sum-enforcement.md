@@ -97,9 +97,14 @@ CREATE INDEX postings_entry_id_idx ON postings (entry_id);
 ```
 
 It covers `UPDATE` and `DELETE` as well as `INSERT` even though trigger 3 forbids both — so that if
-trigger 3 is ever dropped, the balance check still runs. SQLSTATE `23514` is chosen so Spring's
-exception translator produces `DataIntegrityViolationException` rather than an uncategorised
-`SQLException`; the ledger maps that to a domain exception.
+trigger 3 is ever dropped, the balance check still runs.
+
+SQLSTATE `23514` is raised so the failure is identifiable, but the translation this ADR originally
+claimed does not happen: a *deferred* constraint is raised by `COMMIT`, and the transaction manager
+reports that as `TransactionSystemException` — not a `DataIntegrityViolationException`, not even a
+`DataAccessException` — with the real reason two levels down the cause chain. The write path unwraps
+it and rethrows `LedgerInvariantViolationException` carrying the trigger's own message. Statement-time
+violations are translated normally; only the deferred ones behave this way.
 
 ### 2. An entry must have at least two postings, deferred to commit
 
@@ -124,15 +129,28 @@ CREATE TRIGGER postings_append_only
     BEFORE UPDATE OR DELETE ON postings
     FOR EACH ROW EXECUTE FUNCTION reject_posting_mutation();     -- always raises, 23514
 
-REVOKE UPDATE, DELETE ON postings FROM exchange_core;
+REVOKE UPDATE, DELETE ON postings FROM exchange_core_app;
 ```
 
 Zero-sum is checked once, at the commit that creates the entry. Every subsequent `UPDATE` or
 `DELETE` could break it and would never be re-checked for entries not otherwise touched. Append-only
 is therefore not a separate stylistic rule — it is what makes the one-time check sound.
 
-Both mechanisms are kept. The trigger applies to every role including the table owner; the `REVOKE`
-survives the trigger being disabled. Neither alone covers the other's gap.
+Both mechanisms are kept, and they catch different callers. The trigger applies to every role
+including the table owner; the `REVOKE` survives the trigger being disabled.
+
+The revoke only became a control once the application stopped connecting as the owner. A superuser
+bypasses ACL checks entirely, so revoking from the owner is real in `pg_class.relacl` and inert in
+practice — the tests said so plainly before it was fixed. The application now connects as
+`exchange_core_app`, a non-superuser role created at cluster initialisation and granted only
+`SELECT`/`INSERT` on postings; migrations continue to run as the owner. The application role is
+refused by privilege and never reaches the trigger; the owner is refused by the trigger and never
+reaches the privilege check. Both paths are tested.
+
+One wrinkle worth recording: `SELECT ... FOR UPDATE` requires the `UPDATE` privilege, so the
+application role must hold `UPDATE` on `accounts` purely to take the mutex from ADR-0005 — even
+though it never updates an account row. PostgreSQL treats the row lock as update-shaped. Granting
+less breaks the lock.
 
 ### 4. The application pre-flight check is diagnostics, not enforcement
 
