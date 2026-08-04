@@ -104,6 +104,13 @@ That constraint drove several decisions that would otherwise look excessive:
   interposed between this service and the venue.
 - **Credential hygiene.** `.env.example` holds placeholders only, and a test enforces that. Secrets
   arrive through the environment; nothing key-shaped is ever committed.
+- **Two layers that catch different callers.** Ledger postings are append-only by database trigger
+  *and* by revoked privilege, and the tests show these are not the same control wearing two hats. The
+  application connects as a non-superuser role, so it is stopped by `permission denied` and never
+  reaches the trigger. Anyone holding the owner credentials — a superuser, who bypasses privilege
+  checks entirely — is stopped by the trigger and never reaches the privilege check. Remove either
+  layer and one of those callers gets through. That is what "defence in depth" is supposed to mean,
+  and it is worth having a case where it can be demonstrated rather than asserted.
 
 Pointing the service at a non-allowlisted endpoint produces this and exit code 1:
 
