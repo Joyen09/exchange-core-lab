@@ -44,8 +44,35 @@ before any bean exists, so "the process cannot continue with a bad endpoint" is 
 rather than a convention. `ExchangeProperties` re-checks the same allowlist in its constructor as
 defence in depth, so a programmatically constructed context cannot slip past either.
 
-The cost: environment post-processors are registered through a `META-INF/spring` imports file, which
-is less discoverable than an annotation. That is documented in the class itself and in the README.
+The cost: environment post-processors are registered through a factories file, which is less
+discoverable than an annotation. That is documented in the class itself and in the README.
+
+#### Correction (found in Phase 1)
+
+**This decision was documented but not implemented, and nothing noticed for an entire phase.**
+
+The guard was registered in `META-INF/spring/org.springframework.boot.env.EnvironmentPostProcessor.imports`.
+Spring Boot does not read `.imports` files for this type — that mechanism is for auto-configuration
+classes — so the environment post-processor never ran. What actually rejected mainnet endpoints was
+the constructor check on `ExchangeProperties`: the "defence in depth" layer, which is a bean, created
+during context refresh. In other words the system had quietly fallen back to precisely the late-failing
+approach this section records as rejected, while the ADR, the README and the tests all said otherwise.
+
+It surfaced only when Phase 1 added the ledger, which changed bean creation order so that a database
+connection failure started winning the race against `ExchangeProperties`. Until then the disguise was
+perfect: the process did refuse to start, the failure banner did appear, and every test passed.
+
+The tests passed because they asked the wrong question. `MainnetStartupFailsTest` asserted **that**
+startup failed; nothing asserted **where** it failed, and those are different claims. Registration is
+now in `META-INF/spring.factories`, and `GuardRunsBeforeAnyBeanIsCreatedTest` asserts the ordering
+directly — with an unreachable database and a mainnet endpoint, the failure must be the guard, and the
+cause chain must contain no bean creation failure and no connection attempt. It was verified to fail
+against the old registration before being kept.
+
+The general lesson is worth more than the fix: **an architectural claim that no test can distinguish
+from its opposite is a claim nobody is checking.** Two of the strongest tests in this repository —
+this one and the deferred-constraint commit test in ADR-0004 — exist because "the assertion passes"
+and "the assertion means something" turned out to be independent properties.
 
 ## Consequences
 
