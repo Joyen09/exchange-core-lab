@@ -10,8 +10,9 @@ observability. It talks to the **Binance Spot Testnet and nothing else**, enforc
 loss is not an output of this project. It is deliberately isolated from any live trading system —
 separate repository, separate database, separate network, testnet-only endpoints.
 
-> **Status: Phase 0 of 6 complete** — skeleton, container stack, and the safety guardrails.
-> The ledger, order state machine, exchange adapter, reconciler, and dashboards land in Phases 1–5.
+> **Status: Phase 1 of 6 complete** — skeleton, container stack, safety guardrails, and the
+> double-entry ledger. The order state machine, exchange adapter, reconciler, and dashboards land in
+> Phases 2–5.
 > See [Roadmap](#roadmap).
 
 ## Architecture
@@ -129,13 +130,32 @@ REFUSING TO START: exchange endpoint is not on the testnet allowlist.
 |---|---|---|
 | `order` | order lifecycle, state machine, idempotency | call the exchange directly |
 | `exchange` | REST/WebSocket transport, retries, rate limits | contain business rules |
-| `ledger` | double-entry postings, balance invariants | know what an "order" is |
+| `ledger` | double-entry postings, balance invariants, idempotent writes | know what an "order" is |
 | `recon` | local vs venue vs ledger comparison | repair breaks automatically |
 | `risk` | limits, kill switch | make strategy decisions |
 | `guard` | startup endpoint allowlist | anything else |
 
-Only `guard` and the application skeleton carry code today; the rest are declared package
-boundaries with documented contracts.
+`guard` and `ledger` carry code today; the rest are declared package boundaries with documented
+contracts. The boundaries are enforced by ArchUnit rather than convention — the ledger cannot depend
+on the rest of the system, only its repository may reach the database, and nothing outside the
+`exchange` module may construct an HTTP or WebSocket client.
+
+### The ledger
+
+Balances are **derived** by summing an append-only `postings` table; there is no snapshot column, so
+an account balance exists in exactly one place. Three invariants are enforced by the database rather
+than by application code, because a rule a `psql` session can break is a convention:
+
+| Invariant | Mechanism |
+|---|---|
+| every entry's postings sum to zero | deferred constraint trigger, checked at commit |
+| an entry has at least two postings | deferred constraint trigger — the zero-sum trigger fires per posting row, so an entry with none balances vacuously |
+| postings are append-only | immediate trigger, plus revoked `UPDATE`/`DELETE` privileges |
+
+Writes serialise on the account row, locked *before* the balance is read — see
+[ADR-0005](docs/adr/0005-balance-concurrency-control.md) for why that ordering is the whole design
+and how it is tested. Replaying an `idempotency_key` returns the original entry rather than an
+error.
 
 ## Testing
 
@@ -146,6 +166,22 @@ boundaries with documented contracts.
 Integration tests run against a real PostgreSQL through Testcontainers — no in-memory database
 substitutes, because the behaviour that matters (transactions, row locks, constraints) is exactly
 what an in-memory substitute gets wrong. A Docker daemon is therefore required to run the suite.
+
+Several tests are written to fail for the right reason rather than merely to pass:
+
+- **Ordering, not outcome.** The overdraft race is invisible to a twenty-thread test whenever the
+  scheduler is kind, so the primary test records the SQL each transaction issues and asserts the
+  account lock precedes the balance read. A companion test feeds it the reversed order to prove the
+  assertion can fail at all.
+- **Commits, not rollbacks.** A deferred constraint is checked at `COMMIT`, so a `@Transactional`
+  test would pass against a broken trigger and against no trigger. The zero-sum test commits for
+  real, and a deliberately-named neighbour documents why it must.
+- **Where, not whether.** The startup guard is asserted to fail *before any bean is created*, with an
+  unreachable database present to make the distinction observable. This one exists because its
+  absence hid a real defect for a phase — see the correction in
+  [ADR-0001](docs/adr/0001-technology-choices.md).
+- **Property-based.** 1000 randomly generated entries, asserting the ledger still balances after
+  each (jqwik).
 
 ## Development environment notes
 
@@ -177,8 +213,8 @@ Two accommodations exist for restricted networks, neither of which changes the d
 | Phase | Scope | State |
 |---|---|---|
 | 0 | Skeleton, compose stack, CI, testnet guardrail | done |
-| 1 | Double-entry ledger with balance invariants | next |
-| 2 | Order state machine, idempotency, transactional outbox | |
+| 1 | Double-entry ledger with balance invariants | done |
+| 2 | Order state machine, idempotency, transactional outbox | next |
 | 3 | Binance Spot Testnet adapter, WebSocket recovery, partial fills | |
 | 4 | Reconciliation, break classification, risk limits, kill switch | |
 | 5 | Metrics, Grafana dashboards, structured logs, `make demo` | |
@@ -207,7 +243,15 @@ Honest list, expanded as the project grows:
    observed case, but the class of problem is inherent to a filesystem-reading test inside a cached
    build: it can always be skipped rather than run. A pre-commit hook or an always-run verification
    task would be a stronger place for this check than a unit test.
-10. **Endpoint detection is heuristic.** The guard recognises endpoints by property name or URL
+10. **Balance reads are unlocked and may be stale.** The read path returns a number that is
+    display-only; it must never become an input to a write decision, and an ArchUnit rule keeps it
+    unreachable from the write package. Summing postings is also O(n) in an account's history — the
+    materialised view that fixes it is deferred to Phase 5 on purpose.
+11. **The revoked mutation privileges are inert in local development,** because the development role
+    is a PostgreSQL superuser and superusers bypass ACL checks. The append-only trigger is what
+    actually holds here; the revoke becomes operative in a deployment whose application role is not a
+    superuser. Both layers are kept, and a test asserts each of these facts.
+12. **Endpoint detection is heuristic.** The guard recognises endpoints by property name or URL
     scheme. A bare host with no scheme under a name that does not read like an endpoint would not be
     checked; a typed `Endpoint` value that cannot be constructed without passing the allowlist is
     the stronger design, deferred to Phase 3 (ADR-0003).
