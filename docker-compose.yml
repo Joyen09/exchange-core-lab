@@ -16,10 +16,13 @@ services:
       POSTGRES_DB: exchange_core_lab
       POSTGRES_USER: exchange_core
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_dev_only}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-local_dev_only}
     ports:
       - "55432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # Runs once at cluster initialisation, before anything can connect.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U exchange_core -d exchange_core_lab"]
       interval: 5s
@@ -61,7 +64,10 @@ services:
     container_name: exchange-core-lab-app
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-local_dev_only}
+      SPRING_DATASOURCE_USERNAME: exchange_core_app
+      SPRING_DATASOURCE_PASSWORD: ${APP_DB_PASSWORD:-local_dev_only}
+      SPRING_FLYWAY_USER: exchange_core
+      SPRING_FLYWAY_PASSWORD: ${POSTGRES_PASSWORD:-local_dev_only}
       # Left explicit rather than implicit: this is the value the startup guard checks.
       EXCHANGE_REST_BASE_URL: https://testnet.binance.vision
       EXCHANGE_WS_BASE_URL: wss://stream.testnet.binance.vision:9443
