@@ -129,10 +129,27 @@ it whenever the scheduler happens not to interleave badly. Instead:
   that tests latch on to force the breaking interleaving deterministically. Not chosen now: it puts a
   test hook in production code, which is a worse trade than brittle SQL assertions.
 
-### 3. Multi-account entries lock in ascending account-id order
+### 3. Multi-account entries: net per account, then lock distinct ids in ascending order
 
-With a test that two transactions touching the same pair of accounts in opposite logical order do not
-deadlock.
+Postings are grouped by account and **netted before anything is locked or checked**. Deduplication
+here is not tidiness for the lock loop — locking a row twice in one transaction is harmless. It is
+required for the sufficiency check to be correct at all:
+
+```
+account has 100
+entry contains two postings against it: -60 and -60
+checked independently: 100 >= 60 passes, twice
+checked netted:       100 >= 120 fails, correctly
+```
+
+An entry legitimately touches the same account more than once (a debit and its fee, say), so this is
+an ordinary case rather than a defensive one. The write path therefore computes one net movement per
+account, locks the **distinct** account ids in ascending order, and checks each account once against
+its net movement.
+
+Tested with an entry that debits one account twice for more than its balance — which passes a
+per-posting check and must fail a netted one — and with two transactions touching the same pair of
+accounts in opposite logical order, which must not deadlock.
 
 ### 4. Account creation is a concurrent path of its own
 
@@ -157,7 +174,37 @@ One test runs the same twenty-thread scenario under `SERIALIZABLE` with retries,
 correct and measurably slower. It costs one test and it is the answer to "why not just use
 `SERIALIZABLE`?".
 
-### 6. Boundary enforcement
+### 6. The read path does not lock, and what it returns is display-only
+
+Querying a balance takes no lock. It aggregates postings against whatever snapshot it has, so the
+number it returns **may already be out of date by the time the caller sees it** — a concurrent
+transaction may be mid-flight, or may have committed between the query and the response leaving the
+building.
+
+This is deliberate. Making reads lock would serialise every balance query behind every write on that
+account, for a value that is stale the moment it leaves the transaction anyway — a lock cannot make a
+number stay true after it has been read.
+
+The rule that follows is not a nicety, and it is the one thing about the read path that can cause a
+real defect:
+
+> **A balance obtained from the read path may be displayed. It may never be used as an input to a
+> write decision.**
+
+Any "is there enough?" question is answered *inside* the locked write path, by a balance the write
+path computes for itself while holding the lock. Reading a balance, deciding on it, and then writing
+is the exact bug section 2 exists to prevent — with the additional problem that here the read
+happened in a different transaction entirely, so no amount of locking later can rescue it.
+
+Made structural rather than remembered, in the same spirit as the rest of this ADR:
+
+- the read path lives on a separate query service, not on the ledger write repository, so the two are
+  not reachable from the same object;
+- its method is named for what it is (`balanceForDisplay`), so the misuse reads wrongly at the call
+  site;
+- an ArchUnit rule forbids the ledger write package from depending on the query service.
+
+### 7. Boundary enforcement
 
 The ArchUnit rules owed by ADR-0002 carry one for this decision: no code outside the ledger
 repository may insert into `postings`. Configuration-level and API-level discipline both fail the
@@ -165,13 +212,25 @@ same way — silently — unless something mechanical checks them.
 
 ## Consequences
 
-- **The isolation level is part of the design, not an ambient setting.** Lock-then-aggregate is
-  correct under Read Committed precisely because each statement takes a fresh snapshot, so the
-  aggregate taken after the lock sees the previous holder's committed postings. Under
-  `REPEATABLE READ` the same code is **silently wrong**: the transaction's snapshot predates those
-  postings, and `SELECT ... FOR UPDATE` raises no serialisation error because the previous holder
-  only locked the account row without modifying it. The repository asserts its connection's
-  isolation level, and this paragraph is why.
+- **The isolation level is part of the design, not an ambient setting — and the rule is mechanical,
+  not a house style.** The write path asserts its connection's isolation level, and what it asserts
+  is *"not `REPEATABLE READ`"*, because that is the only level whose failure is silent:
+
+  | Level | Post-lock aggregate | Safe? | Why |
+  |---|---|---|---|
+  | `READ COMMITTED` | fresh snapshot per statement | yes | the aggregate taken after the lock sees the previous holder's committed postings |
+  | `REPEATABLE READ` | transaction snapshot, taken before the lock was available | **no** | the read is stale, and `SELECT ... FOR UPDATE` raises nothing because the previous holder only *locked* the account row without modifying it — no row version changed, so there is no conflict to detect |
+  | `SERIALIZABLE` | same stale snapshot as `REPEATABLE READ` | yes | the stale read still happens, but SSI records the read-write dependency between this transaction's aggregate over `postings` and the other's insert into it, and aborts one of them at commit with SQLSTATE 40001 |
+
+  So `SERIALIZABLE` is safe for a different reason than `READ COMMITTED` is: not because the read is
+  current, but because a transaction that acted on a stale read is not permitted to commit. That
+  distinction carries an obligation — under `SERIALIZABLE` the caller **must** handle 40001, or the
+  write simply fails. Safe, but noisy, and the retry has to be idempotency-aware (a retried
+  transaction must not create a second entry).
+
+  Both levels are therefore accepted and `REPEATABLE READ` is rejected outright, with a message
+  naming this ADR. Rejecting anything other than `READ COMMITTED` would have been a convention
+  dressed up as a safety check.
 - **Contention is per account.** All activity on one account serialises, including deposits that
   could never overdraw it. Acceptable at Phase 1 scale and measured before it is optimised.
 - **Non-negativity remains an application rule.** The database enforces that entries balance
