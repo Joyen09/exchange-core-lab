@@ -2,6 +2,12 @@
 # Pinned to the 3.x line on purpose: SPEC §2 specifies Spring Boot 3.x.
 springBoot = "3.5.16"
 springDependencyManagement = "1.1.7"
+jqwik = "1.10.1"
+archunit = "1.5.0"
+
+[libraries]
+jqwik = { module = "net.jqwik:jqwik", version.ref = "jqwik" }
+archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }
