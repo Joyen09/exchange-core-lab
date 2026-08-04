@@ -90,8 +90,15 @@ public final class ExchangeEndpointAllowlist {
 
         String host = uri.getHost();
         if (host == null || host.isBlank()) {
-            throw new ExchangeEndpointNotAllowedException(
-                    propertyName, rawUrl, "URL has no parseable host");
+            // java.net.URI only populates getHost() for RFC 3986 ASCII hosts. A Unicode host —
+            // including a homoglyph such as Cyrillic 'е' in "tеstnet" — leaves it null while
+            // getAuthority() still reads convincingly. Reject rather than normalise: IDN folding
+            // could only ever widen what matches, and no legitimate configuration needs it.
+            String authority = uri.getAuthority();
+            String reason = authority != null && !authority.chars().allMatch(c -> c < 128)
+                    ? "host contains non-ASCII characters (possible homoglyph): '" + authority + "'"
+                    : "URL has no parseable host";
+            throw new ExchangeEndpointNotAllowedException(propertyName, rawUrl, reason);
         }
 
         String normalisedHost = host.toLowerCase(Locale.ROOT);

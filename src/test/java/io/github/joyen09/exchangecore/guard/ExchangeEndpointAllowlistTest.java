@@ -95,6 +95,55 @@ class ExchangeEndpointAllowlistTest {
                 .hasMessageContaining("NO override");
     }
 
+    /**
+     * Host normalisation is exactly one transformation — ASCII case folding — and nothing else.
+     * Unicode literals are written as escapes so the assertions survive any source encoding.
+     */
+    @Test
+    @DisplayName("host matching folds ASCII case and nothing else")
+    void hostNormalisationIsCaseFoldingOnly() {
+        // Uppercase and mixed-case mainnet: folded, then rejected on the folded form.
+        assertRejected("https://API.BINANCE.COM");
+        assertRejected("https://Api.Binance.Com/api/v3/order");
+
+        // Trailing dot (absolute root-label form) resolves to the same name but is not the same
+        // string; rejected for the testnet host too, because failing closed is the safe direction.
+        assertRejected("https://api.binance.com.");
+        assertRejected("https://testnet.binance.vision.");
+
+        // Punycode is a distinct ASCII label and is never decoded back to Unicode.
+        assertRejected("https://xn--tetnet-3we.binance.vision");
+
+        // Homoglyphs: Cyrillic 'e' in "testnet", Cyrillic 'a' in "api", Cyrillic 'o' in "vision".
+        assertRejected("https://tеstnet.binance.vision");
+        assertRejected("https://аpi.binance.com");
+        assertRejected("https://testnet.binance.visiоn");
+
+        // Ideographic full stop rather than '.' as the label separator.
+        assertRejected("https://testnet.binance.vision。");
+
+        // Percent-encoded separators: the authority reads as the testnet host, the parsed host does not.
+        assertRejected("https://testnet%2ebinance%2evision");
+
+        // The one accepted normalisation.
+        assertThatCode(() -> ExchangeEndpointAllowlist.verify(PROPERTY, "https://TESTNET.BINANCE.VISION"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("a homoglyph host is rejected by name, not silently as 'unparseable'")
+    void homoglyphRejectionExplainsItself() {
+        assertThatThrownBy(() -> ExchangeEndpointAllowlist.verify(PROPERTY, "https://tеstnet.binance.vision"))
+                .isInstanceOf(ExchangeEndpointNotAllowedException.class)
+                .hasMessageContaining("non-ASCII");
+    }
+
+    private static void assertRejected(String url) {
+        assertThatThrownBy(() -> ExchangeEndpointAllowlist.verify(PROPERTY, url))
+                .as("must be rejected: %s", url)
+                .isInstanceOf(ExchangeEndpointNotAllowedException.class);
+    }
+
     @Test
     @DisplayName("allowlist contains only Binance Spot Testnet hosts")
     void allowlistIsTestnetOnly() {

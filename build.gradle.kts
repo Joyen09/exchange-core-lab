@@ -55,4 +55,7 @@ tasks.withType<Test> {
 
 tasks.withType<JavaCompile> {
     options.compilerArgs.add("-parameters")
+    // Pinned so tests carrying Unicode escapes and non-ASCII fixtures behave identically on a
+    // developer machine and on a CI runner with a different platform default.
+    options.encoding = "UTF-8"
 }
