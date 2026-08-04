@@ -35,3 +35,6 @@ Thumbs.db
 
 # Extra CA certificates are host-specific and never committed (see docker/app/ca-certificates).
 docker/app/ca-certificates/*.crt
+
+# jqwik records failing samples here so it can replay them; local state, not a deliverable.
+.jqwik-database

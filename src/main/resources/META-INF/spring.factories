@@ -1,2 +1,10 @@
+# Spring Boot loads EnvironmentPostProcessor implementations from this file. It does NOT load them
+# from META-INF/spring/<type>.imports — that mechanism is for auto-configuration classes only.
+# Registering the guard there instead left it silently unregistered, and the check that appeared to
+# be doing the work was the late one in ExchangeProperties. See ADR-0001 and
+# GuardRunsBeforeAnyBeanIsCreatedTest, which fails if this registration is lost again.
+org.springframework.boot.env.EnvironmentPostProcessor=\
+io.github.joyen09.exchangecore.guard.ExchangeEndpointGuard
+
 org.springframework.boot.diagnostics.FailureAnalyzer=\
 io.github.joyen09.exchangecore.guard.ExchangeEndpointNotAllowedFailureAnalyzer
