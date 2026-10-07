@@ -60,8 +60,63 @@ class ArchitectureRulesTest {
             .resideInAPackage("..ledger..")
             .should()
             .dependOnClassesThat()
-            .resideInAnyPackage("..order..", "..exchange..", "..recon..", "..risk..")
+            .resideInAnyPackage(
+                    "..order..", "..exchange..", "..recon..", "..risk..", "..api..", "..outbox..", "..idempotency..")
             .because("the ledger moves value between accounts and nothing else (SPEC §3)");
+
+    /**
+     * ADR-0005 §7, generalised to Phase 2. Three more packages now own tables, and the same argument
+     * applies to each: {@code OrderService} inserting its own SQL would be a second write path that nobody
+     * would think to give the row lock or the append-only event to. The suffix is the whole rule — if a
+     * class needs a {@code JdbcTemplate}, it has to be named as the thing that owns persistence.
+     */
+    @ArchTest
+    static final ArchRule onlyRepositoriesTalkToTheDatabase = noClasses()
+            .that()
+            .resideInAnyPackage("..order..", "..outbox..", "..idempotency..", "..api..")
+            .and()
+            .haveSimpleNameNotEndingWith("Repository")
+            .should()
+            .dependOnClassesThat()
+            .haveFullyQualifiedName("org.springframework.jdbc.core.JdbcTemplate")
+            .because("persistence lives behind one named class per table, so its invariants have one home");
+
+    /**
+     * The outbox is a delivery mechanism, not part of the order domain. It moves rows that name an
+     * aggregate type and an opaque payload; it has never needed to know that one of those aggregates is an
+     * order, and this is what stops the next feature from teaching it. The reusability is the point:
+     * Phase 4's reconciliation events publish through the same table without touching this package.
+     */
+    @ArchTest
+    static final ArchRule theOutboxDoesNotKnowWhatItIsDelivering = noClasses()
+            .that()
+            .resideInAPackage("io.github.joyen09.exchangecore.outbox")
+            .and()
+            // The verification consumer is the exception, and deliberately a named one: its whole job is to
+            // read the order events back off the broker, so it is the one class here that must know the shape
+            // of the envelope.
+            .haveSimpleNameNotStartingWith("OrderEventVerifier")
+            .should()
+            .dependOnClassesThat()
+            .resideInAnyPackage("..order..", "..ledger..", "..api..")
+            .because("the outbox carries an aggregate id and a payload; what they mean is not its concern");
+
+    /**
+     * The domain does not reach back up into the transport. An exception or a status code decided inside
+     * {@code OrderService} would make the service unusable from anywhere but a controller — and Phase 3's
+     * exchange adapter drives exactly these transitions with no HTTP request in sight.
+     */
+    @ArchTest
+    static final ArchRule theDomainDoesNotDependOnTheWebLayer = noClasses()
+            .that()
+            .resideInAnyPackage("..order..", "..ledger..", "..outbox..", "..idempotency..")
+            .should()
+            .dependOnClassesThat()
+            .resideInAPackage("..api..")
+            .orShould()
+            .dependOnClassesThat()
+            .resideInAnyPackage("org.springframework.web..", "org.springframework.http..")
+            .because("the same transitions are driven by the exchange adapter in Phase 3, with no request");
 
     /**
      * ADR-0003 extension. Configuration-level coverage stops something being *configured* to reach
