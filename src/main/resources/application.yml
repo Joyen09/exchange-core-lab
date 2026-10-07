@@ -19,6 +19,34 @@ spring:
     # Migrations run as the owner: the application role cannot, and must not be able to, alter schema.
     user: exchange_core
     password: local_dev_only
+  kafka:
+    # Redpanda, published by compose on a non-default host port.
+    bootstrap-servers: localhost:19092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # The outbox must not mark a row published until the broker has actually replicated it;
+      # anything weaker would turn "at least once" into "usually".
+      acks: all
+    consumer:
+      group-id: exchange-core-lab.verifier
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+outbox:
+  topic: exchange-core-lab.orders.v1
+  poll-interval: 200ms
+  batch-size: 100
+  max-attempts: 10
+  initial-backoff: 1s
+  max-backoff: 5m
+  send-timeout: 10s
+  retention: 7d
+
+idempotency:
+  retention: 24h
+  abandoned-after: 5m
 
 server:
   port: 8080
