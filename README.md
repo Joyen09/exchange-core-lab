@@ -10,10 +10,10 @@ observability. It talks to the **Binance Spot Testnet and nothing else**, enforc
 loss is not an output of this project. It is deliberately isolated from any live trading system —
 separate repository, separate database, separate network, testnet-only endpoints.
 
-> **Status: Phase 1 of 6 complete** — skeleton, container stack, safety guardrails, and the
-> double-entry ledger. The order state machine, exchange adapter, reconciler, and dashboards land in
-> Phases 2–5.
-> See [Roadmap](#roadmap).
+> **Status: Phase 1 of 6 complete, Phase 2 in progress** — skeleton, container stack, safety
+> guardrails and the double-entry ledger are done; the order state machine, idempotency and
+> transactional outbox are being built now. The exchange adapter, reconciler and dashboards land in
+> Phases 3–5. See [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -45,6 +45,22 @@ The target design; shaded modules are not implemented yet.
 
 Every module boundary is a Java package with a documented contract, not a separate service. The
 reasoning — and the cost of that choice — is in [ADR-0002](docs/adr/0002-modular-monolith.md).
+
+## Start here
+
+Three things worth more than a tour of the file tree:
+
+1. **[The testnet guardrail](#safety-guardrails)** and the test that pins it,
+   [`GuardRunsBeforeAnyBeanIsCreatedTest`](src/test/java/io/github/joyen09/exchangecore/guard/GuardRunsBeforeAnyBeanIsCreatedTest.java)
+   — a control with no override, and the assertion that proves *where* it fires rather than merely
+   that it fires.
+2. **[The most useful bug in this repository](#the-most-useful-bug-in-this-repository)** — a defect
+   that survived a whole phase with every observable symptom correct, and what it changed about how
+   the tests here are written.
+3. **[The architecture decision records](#architecture-decisions)** — each one has a section on what
+   was given up, because an ADR that only lists benefits is not finished.
+
+`make demo`, the one-command walkthrough of a full order lifecycle, arrives in Phase 5.
 
 ## Quick start
 
@@ -293,7 +309,7 @@ The correction in ADR-0001 is the write-up of
 |---|---|---|
 | 0 | Skeleton, compose stack, CI, testnet guardrail | done |
 | 1 | Double-entry ledger with balance invariants | done |
-| 2 | Order state machine, idempotency, transactional outbox | next |
+| 2 | Order state machine, idempotency, transactional outbox | in progress |
 | 3 | Binance Spot Testnet adapter, WebSocket recovery, partial fills | |
 | 4 | Reconciliation, break classification, risk limits, kill switch | |
 | 5 | Metrics, Grafana dashboards, structured logs, `make demo` | |
