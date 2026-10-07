@@ -10,32 +10,32 @@ observability. It talks to the **Binance Spot Testnet and nothing else**, enforc
 loss is not an output of this project. It is deliberately isolated from any live trading system —
 separate repository, separate database, separate network, testnet-only endpoints.
 
-> **Status: Phase 1 of 6 complete, Phase 2 in progress** — skeleton, container stack, safety
-> guardrails and the double-entry ledger are done; the order state machine, idempotency and
-> transactional outbox are being built now. The exchange adapter, reconciler and dashboards land in
-> Phases 3–5. See [Roadmap](#roadmap).
+> **Status: Phase 2 of 6 complete** — skeleton, container stack, safety guardrails, the double-entry
+> ledger, and the order service: state machine, two layers of idempotency, and a transactional outbox
+> published to Redpanda. The exchange adapter, reconciler, and dashboards land in Phases 3–5.
+> See [Roadmap](#roadmap).
 
 ## Architecture
 
-The target design; shaded modules are not implemented yet.
+The target design; bracketed modules are not implemented yet.
 
 ```
                        ┌────────────────────┐
-    REST API  ────────►│   Order Service    │      · state machine
-                       │  (state machine +  │      · idempotency by client_order_id
+    REST API  ────────►│   Order Service    │      · state machine (gate, not suggestion)
+                       │  (state machine +  │      · idempotency: HTTP key + client_order_id
                        │     idempotency)   │      · transactional outbox
                        └─────────┬──────────┘
-                                 │ outbox
+                                 │ outbox (polled, SKIP LOCKED)
                                  ▼
                        ┌────────────────────┐
                        │      Redpanda      │      at-least-once delivery,
-                       └─────────┬──────────┘      consumers deduplicate
+                       └─────────┬──────────┘      consumers deduplicate by event_id
                                  │
                ┌─────────────────┼─────────────────┐
                ▼                 ▼                 ▼
       ┌────────────────┐ ┌──────────────┐ ┌────────────────┐
-      │    Exchange    │ │    Ledger    │ │   Reconciler   │
-      │    Adapter     │ │(double-entry)│ │  (scheduled)   │
+      │  [ Exchange  ] │ │    Ledger    │ │ [ Reconciler ] │
+      │  [ Adapter   ] │ │(double-entry)│ │ [ (scheduled)] │
       └───────┬────────┘ └──────────────┘ └───────┬────────┘
               │                                   │
               ▼                                   ▼
@@ -151,17 +151,23 @@ REFUSING TO START: exchange endpoint is not on the testnet allowlist.
 
 | Package | Owns | Explicitly does not |
 |---|---|---|
-| `order` | order lifecycle, state machine, idempotency | call the exchange directly |
+| `order` | order lifecycle, state machine, funds lock | call the exchange directly, write its own SQL |
+| `api` | HTTP contract, problem details, correlation ids | contain business rules |
+| `idempotency` | request de-duplication and response replay | know what an order is |
+| `outbox` | at-least-once delivery of events | know what it is delivering |
 | `exchange` | REST/WebSocket transport, retries, rate limits | contain business rules |
 | `ledger` | double-entry postings, balance invariants, idempotent writes | know what an "order" is |
 | `recon` | local vs venue vs ledger comparison | repair breaks automatically |
 | `risk` | limits, kill switch | make strategy decisions |
 | `guard` | startup endpoint allowlist | anything else |
 
-`guard` and `ledger` carry code today; the rest are declared package boundaries with documented
-contracts. The boundaries are enforced by ArchUnit rather than convention — the ledger cannot depend
-on the rest of the system, only its repository may reach the database, and nothing outside the
-`exchange` module may construct an HTTP or WebSocket client.
+`guard`, `ledger`, `order`, `api`, `idempotency` and `outbox` carry code today; `exchange`, `recon`
+and `risk` are declared package boundaries with documented contracts. The boundaries are enforced by
+ArchUnit rather than convention — the ledger cannot depend on the rest of the system, only a
+`*Repository` may reach the database, the domain cannot depend on the web layer, the outbox cannot
+depend on the order package, and nothing outside the `exchange` module may construct an HTTP or
+WebSocket client. Each of those rules was checked against a deliberate violation to confirm it fails
+when it should.
 
 ### The ledger
 
@@ -183,6 +189,59 @@ Writes serialise on the account row, locked *before* the balance is read — see
 [ADR-0005](docs/adr/0005-balance-concurrency-control.md) for why that ordering is the whole design
 and how it is tested. Replaying an `idempotency_key` returns the original entry rather than an
 error.
+
+### The order service
+
+```bash
+curl -s -X POST http://localhost:18080/api/v1/orders \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 11111111-1111-1111-1111-111111111111' \
+  -d '{"clientOrderId":"demo-1","symbol":"BTCUSDT","side":"BUY",
+       "type":"LIMIT","timeInForce":"GTC","quantity":"0.5","price":"60000"}'
+```
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/api/v1/orders` | requires `Idempotency-Key`; 201 on creation, replayed byte-for-byte on retry |
+| `GET` | `/api/v1/orders/{id}` | 404 if unknown |
+| `GET` | `/api/v1/orders?symbol=&status=&cursor=&limit=` | keyset pagination over `(created_at, id)`, opaque cursor |
+| `DELETE` | `/api/v1/orders/{id}` | 200 if cancelled outright, 202 if a cancel is now in flight |
+
+Amounts are JSON **strings**, in both directions. A JSON number invites the client to parse it into a
+`double`, and the point at which that becomes a problem is not the point at which it is noticed.
+Errors are RFC 7807 `ProblemDetail` documents with an additional machine-readable `code`.
+
+**The state machine is a gate, not a suggestion.** The legal transitions are a table that a test
+enumerates cell by cell, and a refused transition writes *nothing* — no event, no outbox row, no
+version bump. Two cases in it are worth reading the comments for: `CANCELING → FILLED` is legal,
+because an order can fill while its cancel is still in flight and a state machine that refused
+reality would be catching the venue rather than a bug; `PENDING → FILLED` is not, because an order
+that was never sent cannot have filled.
+
+**Two layers of idempotency, answering two different questions**
+([ADR-0007](docs/adr/0007-two-layer-idempotency.md)):
+
+| Layer | Keyed on | Duplicate it catches | Answer |
+|---|---|---|---|
+| `Idempotency-Key` header | the request, fingerprinted | the same request sent twice | the original response, replayed exactly |
+| `client_order_id` | the order, `UNIQUE (owner_id, client_order_id)` | two requests that would create the same order | 200 with the existing order and a `notice` |
+
+Neither is sufficient alone, and the asymmetry is visible in the shipped behaviour: a retried
+cancellation has no `client_order_id` to collide with, and a caller that generates a fresh key after
+a crash defeats the header while the constraint still holds.
+
+**The status code describes the request, not the order.** The consequence that looks like a bug until
+you have the rule: an order rejected for insufficient funds returns **201 Created**, with
+`"status": "REJECTED"` in the body. The request was understood, accepted, and produced a persisted
+order and two events. A 4xx would be a claim about the request, and the request was fine.
+
+**The outbox** is written in the same transaction as the state change, so nothing can be published
+without being persisted and nothing persisted goes unpublished
+([ADR-0006](docs/adr/0006-transactional-outbox-by-polling.md)). A polling publisher claims batches
+with `FOR UPDATE SKIP LOCKED`, retries with exponential backoff capped at five minutes, and after ten
+attempts sets `dead_at` — a terminal state with a metric, not a row that quietly keeps failing.
+Delivery is therefore at-least-once; `order_events` is append-only and is the source of truth, with
+`orders` as a projection folded from it ([ADR-0008](docs/adr/0008-order-events-as-the-source-of-truth.md)).
 
 ## Testing
 
@@ -208,7 +267,22 @@ Several tests are written to fail for the right reason rather than merely to pas
   absence hid a real defect for a phase — see the correction in
   [ADR-0001](docs/adr/0001-technology-choices.md).
 - **Property-based.** 1000 randomly generated entries, asserting the ledger still balances after
-  each (jqwik).
+  each (jqwik). And 500 random walks of the order state machine, each rebuilt from its event log and
+  compared with the stored row by record equality — which found a real defect that every
+  hand-written test had missed, because every hand-written test checked the row rather than the log.
+  See [ADR-0008](docs/adr/0008-order-events-as-the-source-of-truth.md).
+- **Crash windows, not happy paths.** The outbox's hardest case is a publisher that dies *after* the
+  broker accepted the message and *before* the database recorded it. A test does exactly that, then
+  asserts two deliveries and one effect — which is what at-least-once plus de-duplication buys, and
+  is unobservable on a good day.
+- **Contention, not sequence.** Fifty simultaneous requests with one `Idempotency-Key`, and fifty
+  with distinct keys and one `client_order_id`. A check-then-insert with a race in it passes every
+  sequential idempotency test in the suite; these are the two that fail it.
+
+A **verifying consumer** (`OrderEventVerifier`) reads the published topic back and records each
+`event_id`. It is not a product feature: it exists so that the delivery guarantees in ADR-0006 are
+*tested* rather than asserted, and it is the model Phase 4's reconciliation consumer follows. Its
+duplicate and out-of-order counters are what the outbox tests assert on.
 
 ## The most useful bug in this repository
 
@@ -302,6 +376,9 @@ The correction in ADR-0001 is the write-up of
 - [ADR-0003 — Guard the exchange namespace, not a list of properties](docs/adr/0003-namespace-wide-endpoint-guard.md)
 - [ADR-0004 — Enforcing the zero-sum invariant](docs/adr/0004-zero-sum-enforcement.md)
 - [ADR-0005 — Concurrency control for derived balances](docs/adr/0005-balance-concurrency-control.md)
+- [ADR-0006 — Publishing events by polling a transactional outbox](docs/adr/0006-transactional-outbox-by-polling.md)
+- [ADR-0007 — Two layers of idempotency, and why one is not enough](docs/adr/0007-two-layer-idempotency.md)
+- [ADR-0008 — `order_events` is the source of truth; `orders` is a projection](docs/adr/0008-order-events-as-the-source-of-truth.md)
 
 ## Roadmap
 
@@ -309,8 +386,8 @@ The correction in ADR-0001 is the write-up of
 |---|---|---|
 | 0 | Skeleton, compose stack, CI, testnet guardrail | done |
 | 1 | Double-entry ledger with balance invariants | done |
-| 2 | Order state machine, idempotency, transactional outbox | in progress |
-| 3 | Binance Spot Testnet adapter, WebSocket recovery, partial fills | |
+| 2 | Order state machine, idempotency, transactional outbox | done |
+| 3 | Binance Spot Testnet adapter, WebSocket recovery, partial fills | next |
 | 4 | Reconciliation, break classification, risk limits, kill switch | |
 | 5 | Metrics, Grafana dashboards, structured logs, `make demo` | |
 
@@ -326,11 +403,15 @@ Honest list, expanded as the project grows:
    would mean removing the guardrail this project is partly built to demonstrate.
 5. **Balances are derived, not cached.** Summing postings is correct but does not scale; the
    trade-off and its eventual fix (materialised views) are deferred to Phase 5 on purpose.
-6. **Single instance assumed.** Nothing here has been designed for horizontal scale-out; the
-   outbox publisher in Phase 2 will assume one active writer.
+6. **Single instance assumed, with one exception.** Nothing here is designed for horizontal
+   scale-out — except the outbox publisher, which claims rows with `FOR UPDATE SKIP LOCKED` and is
+   therefore safe to run in several instances at once. (An earlier version of this list predicted it
+   would assume one active writer. It does not, and a test runs two publishers against forty
+   messages to show it.) Everything else still assumes one process.
 7. **Local development only.** No Kubernetes manifests, no deployment automation, no remote host.
-8. **Phase 0 has no business behaviour yet.** The stack starts, migrates, reports health, and
-   refuses unsafe endpoints — that is the entirety of what is implemented today.
+8. **No venue behind the order service yet.** Orders are accepted, validated, locked against the
+   ledger, persisted and published, but nothing submits them anywhere: `PENDING → SUBMITTED` and
+   everything downstream of it is driven by tests, not by an exchange. Phase 3 supplies the adapter.
 9. **The isolation scanner is only as fresh as the build's input tracking.** `NoOverrideSwitchTest`
    reads the working tree, which Gradle does not treat as a test input by default — so editing a
    scanned file and re-running the build could report an up-to-date pass without the scanner having
@@ -347,7 +428,36 @@ Honest list, expanded as the project grows:
     the revoke is a real control on that path — but anyone holding the owner credentials is stopped
     only by the append-only trigger. Both layers are kept, and tests assert which one catches which
     caller.
-12. **Endpoint detection is heuristic.** The guard recognises endpoints by property name or URL
+12. **`MARKET` orders are accepted by the schema and refused by the API.** The enum and the `CHECK`
+    constraint allow `MARKET`, but `POST /api/v1/orders` returns 422
+    `MARKET_ORDER_NOT_SUPPORTED_YET` for one. The reason is specific rather than laziness: the funds
+    lock has to compute a notional amount up front, and a market order has no price to compute it
+    from. Doing it properly needs a reference price and a slippage allowance — both Phase 3 inputs —
+    and locking the wrong amount is worse than refusing the order.
+13. **There is no HTTP endpoint for `CANCELING → CANCELED`.** A cancel request on a live order
+    returns 202 and leaves the order in `CANCELING`; only the venue's confirmation should complete
+    it, and the venue arrives in Phase 3. Exposing an endpoint that forces the terminal state would
+    let a client declare an order cancelled that the exchange is still working on, which is the one
+    lie this state machine exists to prevent. The transition itself is implemented and tested — it
+    simply has no caller yet.
+14. **Delivery is at-least-once, permanently.** Between the broker accepting a message and the
+    database recording that it did, there is a window; a process that dies inside it resends. Every
+    consumer must de-duplicate by `event_id`. This is inherent to the design rather than a defect to
+    be fixed, and `OrderEventVerifier` exists so the claim is tested rather than asserted.
+15. **The projection's agreement with the event log is tested, not constrained.** The schema cannot
+    express "`orders` equals the fold of `order_events`", so the guarantee rests on one code path,
+    one transaction, an ArchUnit rule and a property test standing in for a constraint that cannot be
+    written. That is weaker than a constraint, and `OrderProjector.rebuild` exists for the test
+    rather than as a repair tool — if the projection ever did drift, the fix would be a script
+    somebody writes under pressure.
+16. **`clientOrderId` uniqueness is scoped to an owner, and there is one owner.** The constraint is
+    `(owner_id, client_order_id)`, which is the right shape, but with `owner_id` fixed at `'local'`
+    and not exposed by the API it is effectively a global namespace today.
+17. **The idempotency crash window is shortened, not closed.** A process that dies between committing
+    the claim and committing the work leaves a claim that answers 409 until the abandoned-claim sweep
+    clears it, five minutes later. No value for that interval is simply correct: shorter risks
+    releasing a key while slow work is still running, longer makes a crash more visible to clients.
+18. **Endpoint detection is heuristic.** The guard recognises endpoints by property name or URL
     scheme. A bare host with no scheme under a name that does not read like an endpoint would not be
     checked; a typed `Endpoint` value that cannot be constructed without passing the allowlist is
     the stronger design, deferred to Phase 3 (ADR-0003).
