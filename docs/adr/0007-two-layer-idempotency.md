@@ -143,6 +143,37 @@ would be a claim about the request, and the request was fine. `OrderApiIT` names
 money is still a 201 — the request succeeded, the order did not"* so the next reader meets the
 reasoning before the surprise.
 
+#### Correction (Phase 3): a successful placement now returns 202, not 201
+
+The paragraph above says a placement returns 201. That was right for Phase 2 and stopped being right in
+Phase 3, when submission moved off the request thread (ADR-0010). An order that is accepted now leaves
+the request as `PENDING` with work still to come, and 202 Accepted is what that means. 201 would claim
+the thing is done.
+
+The split, and it is a split rather than a replacement:
+
+| Outcome | Code | Why |
+|---|---|---|
+| order accepted, status `PENDING` | **202** | accepted; a submitter will take it to the venue |
+| order rejected in-request for insufficient funds, status `REJECTED` | **201** | terminal before the response left; nothing continues |
+| `clientOrderId` already exists | **200** | unchanged — nothing was created |
+
+So the specific example above — insufficient funds returning 201 — survives the change, and for the
+reason this section already gave. What changed is the case around it.
+
+The underlying rule is untouched and now matters more, because the code alone no longer tells a client
+whether the order is finished:
+
+> **The status code describes what happened to the request. The order's state is in the body.**
+
+The README and the API documentation say outright that clients branch on `status` in the body and not on
+the status code. A client that treats 202 as "pending" and 201 as "done" happens to be right today and
+is relying on something this project does not promise.
+
+One consequence worth stating because it is the kind of thing a reader assumes rather than checks: the
+idempotency layer records the original status code, so **a replayed rejection replays its 201**, not a
+202. An acceptance test asserts exactly that.
+
 ## What we gave up
 
 - **Two mechanisms to understand instead of one.** A reader has to know that two different duplicates

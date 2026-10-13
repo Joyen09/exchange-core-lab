@@ -38,3 +38,8 @@ docker/app/ca-certificates/*.crt
 
 # jqwik records failing samples here so it can replay them; local state, not a deliverable.
 .jqwik-database
+
+# Vendor documentation is cited, not copied: docs/vendor/binance-citations.md holds the quotations,
+# and the full file stays local. It is © Binance with all rights reserved, and this repository is
+# MIT-licensed — see docs/vendor/README.md.
+docs/vendor/binance-spot-api.txt

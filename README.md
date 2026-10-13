@@ -48,16 +48,22 @@ reasoning — and the cost of that choice — is in [ADR-0002](docs/adr/0002-mod
 
 ## Start here
 
-Three things worth more than a tour of the file tree:
+Four things worth more than a tour of the file tree:
 
-1. **[The testnet guardrail](#safety-guardrails)** and the test that pins it,
+1. **[The bug that a document caught and a test never could](docs/adr/0009-fake-venue-and-the-real-endpoint.md#what-the-vendored-reference-confirmed-and-what-it-corrected)**
+   — Binance's `executionReport` sets the trade id to `-1` when the event is not a fill. The plan was to
+   deduplicate fills on `(symbol, tradeId)`, which would have made the first non-trade event claim a key
+   that every later one collided with, and they would have been silently discarded. It would have passed
+   every test, because the test double was going to be built from the same assumption and emit the same
+   `-1`. Found by reading the vendor's documentation, before any of it was written.
+2. **[The testnet guardrail](#safety-guardrails)** and the test that pins it,
    [`GuardRunsBeforeAnyBeanIsCreatedTest`](src/test/java/io/github/joyen09/exchangecore/guard/GuardRunsBeforeAnyBeanIsCreatedTest.java)
    — a control with no override, and the assertion that proves *where* it fires rather than merely
    that it fires.
-2. **[The most useful bug in this repository](#the-most-useful-bug-in-this-repository)** — a defect
+3. **[The most useful bug in this repository](#the-most-useful-bug-in-this-repository)** — a defect
    that survived a whole phase with every observable symptom correct, and what it changed about how
    the tests here are written.
-3. **[The architecture decision records](#architecture-decisions)** — each one has a section on what
+4. **[The architecture decision records](#architecture-decisions)** — each one has a section on what
    was given up, because an ADR that only lists benefits is not finished.
 
 `make demo`, the one-command walkthrough of a full order lifecycle, arrives in Phase 5.
@@ -379,6 +385,12 @@ The correction in ADR-0001 is the write-up of
 - [ADR-0006 — Publishing events by polling a transactional outbox](docs/adr/0006-transactional-outbox-by-polling.md)
 - [ADR-0007 — Two layers of idempotency, and why one is not enough](docs/adr/0007-two-layer-idempotency.md)
 - [ADR-0008 — `order_events` is the source of truth; `orders` is a projection](docs/adr/0008-order-events-as-the-source-of-truth.md)
+- [ADR-0009 — A fake venue for behaviour, the real testnet for protocol](docs/adr/0009-fake-venue-and-the-real-endpoint.md)
+- [ADR-0010 — Orders reach the venue through an event, not through the request](docs/adr/0010-event-driven-order-submission.md)
+- [ADR-0011 — Recovering after a disconnect: overlap, cumulative values, and `tradeId`](docs/adr/0011-reconnect-recovery.md)
+
+ADR-0004 and ADR-0007 carry Phase 3 corrections: the zero-sum invariant was only correct for
+single-asset entries, and a successful placement now returns 202 rather than 201.
 
 ## Roadmap
 
