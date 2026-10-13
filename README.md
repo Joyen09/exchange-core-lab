@@ -48,16 +48,22 @@ reasoning — and the cost of that choice — is in [ADR-0002](docs/adr/0002-mod
 
 ## Start here
 
-Three things worth more than a tour of the file tree:
+Four things worth more than a tour of the file tree:
 
-1. **[The testnet guardrail](#safety-guardrails)** and the test that pins it,
+1. **[The bug that a document caught and a test never could](docs/adr/0009-fake-venue-and-the-real-endpoint.md#what-the-vendored-reference-confirmed-and-what-it-corrected)**
+   — Binance's `executionReport` sets the trade id to `-1` when the event is not a fill. The plan was to
+   deduplicate fills on `(symbol, tradeId)`, which would have made the first non-trade event claim a key
+   that every later one collided with, and they would have been silently discarded. It would have passed
+   every test, because the test double was going to be built from the same assumption and emit the same
+   `-1`. Found by reading the vendor's documentation, before any of it was written.
+2. **[The testnet guardrail](#safety-guardrails)** and the test that pins it,
    [`GuardRunsBeforeAnyBeanIsCreatedTest`](src/test/java/io/github/joyen09/exchangecore/guard/GuardRunsBeforeAnyBeanIsCreatedTest.java)
    — a control with no override, and the assertion that proves *where* it fires rather than merely
    that it fires.
-2. **[The most useful bug in this repository](#the-most-useful-bug-in-this-repository)** — a defect
+3. **[The most useful bug in this repository](#the-most-useful-bug-in-this-repository)** — a defect
    that survived a whole phase with every observable symptom correct, and what it changed about how
    the tests here are written.
-3. **[The architecture decision records](#architecture-decisions)** — each one has a section on what
+4. **[The architecture decision records](#architecture-decisions)** — each one has a section on what
    was given up, because an ADR that only lists benefits is not finished.
 
 `make demo`, the one-command walkthrough of a full order lifecycle, arrives in Phase 5.
