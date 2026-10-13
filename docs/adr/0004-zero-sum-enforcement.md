@@ -147,6 +147,43 @@ Two obligations came with the change, both met in the V5 migration:
   failed, that would have been a real data defect inherited from Phase 1, to be reported and not quietly
   repaired.
 
+#### Why "the migration ran without aborting" is not evidence
+
+A validation block that passes proves nothing on its own. It passes identically when it is working and
+when it is checking the wrong thing, and the same is true of the negative test: a test that rejects the
+cross-asset entry would reject it under *both* rules if the old rule had also caught it, and would then
+have measured nothing.
+
+So both were probed directly, with a throwaway test that was run and then deleted. Its literal output:
+
+```
+### PROBE A — restore the V2 (global-sum) function body, insert BTC +1 / USDT -1
+### PROBE A RESULT: COMMITTED. rows now in postings for this entry = 2
+
+### PROBE B — run V5's validation block against that committed entry
+### PROBE B RESULT: ABORTED
+### PROBE B MESSAGE: ERROR: V5 aborted: 2 existing entry/asset combinations are unbalanced
+    under the per-asset rule. entry 8e03d722-2479-4c6b-8e6e-fb2d54118286 asset BTC sums to
+    1.000000000000000000; entry 8e03d722-2479-4c6b-8e6e-fb2d54118286 asset USDT sums to
+    -1.000000000000000000
+```
+
+**Probe A establishes the negative test's discriminating power.** With the V2 function body restored,
+`BTC +1, USDT -1` commits — two postings, accepted, no complaint. That is what the restatement changes,
+and without knowing it the new test is an assertion about nothing.
+
+**Probe B establishes that the validation pass would actually stop a migration.** Fed exactly the entry
+Probe A had just committed, it aborted and named the offending entry and both assets.
+
+Note the count: **two** entry/asset combinations for one entry, because an unbalanced cross-asset entry
+is unbalanced in each of its assets. An earlier summary of this work said "1", which was read off a
+partial assertion match rather than the output. The output says two.
+
+The probe was deleted after it ran. It had to construct a state the schema is designed to make
+impossible — restoring a superseded trigger body in order to write data the current rule forbids — and a
+permanent test that does that is a loaded gun left in the drawer. What survives is this record and the
+negative test in `LedgerPerAssetBalanceIT`, which is the part worth keeping.
+
 #### The counterparty leg, which the first draft of the Phase 3 specification omitted
 
 Stating the invariant per asset is not enough on its own: each asset still needs both sides. A fill is

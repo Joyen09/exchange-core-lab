@@ -98,6 +98,32 @@ on your machine.
 | Prometheus | 19090 | metrics |
 | Grafana | 13000 | dashboards (anonymous viewer access enabled) |
 
+## The design principle this repository is built on
+
+> **Don't remember to avoid the mistake. Make the mistake impossible to express.**
+
+Every rule that depends on somebody remembering it is a rule that holds until the day it doesn't, and
+the day it doesn't is never the day somebody is looking. The same idea therefore shows up at three
+different layers here, deliberately, and it is worth seeing them together rather than meeting each one
+as a local quirk:
+
+| Layer | Mistake to prevent | How it is made inexpressible |
+|---|---|---|
+| **Application startup** | pointing the service at a live exchange | the endpoint allowlist has **no override switch** — no flag, no profile, no environment variable. A non-testnet URL does not start the process, and a test scans the whole repository for any property that could reintroduce one |
+| **Database schema** | writing a trade de-duplication row keyed on a trade id of `-1`, which `executionReport` sends for non-fill events, silently swallowing every later event for that symbol | `CHECK (trade_id >= 0)` on `processed_trades`. The application also checks `x == "TRADE"`, but the constraint is what turns a forgotten check from a silent discard into a loud failure |
+| **Type signature** | querying `openOrders` without a symbol — four times the request weight, and on the recovery path, at the worst possible moment | `fetchOpenOrders(Symbol symbol)` takes the symbol as a parameter. There is no no-argument overload, so the expensive call is not a thing a caller can accidentally write |
+
+The pattern in each case is the same: a comment saying "don't do X" is replaced by a structure in which
+X cannot be written. The ledger follows it too — balances are derived rather than stored, so a stale
+snapshot is not a thing that can exist; `order_events` has `UPDATE` and `DELETE` revoked *and* a trigger
+that raises, so an edited history is not a thing that can be written.
+
+The cost is real and worth naming: each of these is less flexible than a convention, and the day a
+legitimate reason appears to do the forbidden thing, the structure has to be changed rather than
+bypassed. That is the trade, and it is taken on purpose — see
+[the most useful bug in this repository](#the-most-useful-bug-in-this-repository) for what the
+alternative looked like when it failed.
+
 ## Safety guardrails
 
 This repository exists alongside a separate live trading system that must never be affected by it.
