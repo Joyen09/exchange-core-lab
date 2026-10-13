@@ -1,43 +1,50 @@
-# Vendored vendor documentation
+# Vendor documentation: cited, not copied
 
-Third-party reference material committed verbatim, so that code written against it can be checked
-against what it was actually written against.
+`binance-citations.md` holds short quotations from Binance's Spot API documentation, each with the
+document path, the line number and the retrieval date, so that every protocol constant in this
+repository has a source a reviewer can check.
 
-## Why this directory exists
+## Why the full document is not here
 
-The fake Binance venue in `src/test/.../fakevenue/` is built from a reading of Binance's Spot API
-documentation. Where that reading is wrong, the double is wrong in the same way as the adapter, the
-tests pass, and nothing notices until the real venue disagrees — ADR-0009 states that risk plainly and
-this directory is its main mitigation.
+An earlier version of this directory committed Binance's complete `llms-full.txt` — 8.2 MB, 211,182
+lines. That was removed before it reached `main`, for a reason that matters more than repository size:
 
-It is a mitigation rather than a fix. A vendored document turns "I believe the error code is X" into a
-claim with a citation that a reviewer can check, and it pins the version the code was written against so
-a later change at the vendor shows up as a diff rather than as a mystery.
+**The document is © Binance, all rights reserved. This repository is MIT-licensed.** Committing the
+whole thing would redistribute someone else's reserved-rights work under a licence that grants everyone
+the right to copy, modify and sublicense it. A repository that argues at length about doing things
+properly should not get that wrong on page one.
 
-## Expected contents
+Short quotations for the purpose of documenting and verifying an interface, attributed and dated, are a
+different thing from wholesale redistribution. That is what `binance-citations.md` is.
 
-| File | Source | Fetched by |
-|---|---|---|
-| `binance-spot-api.txt` | `https://developers.binance.com/en/docs/llms-full.txt` | the author, locally |
+The size was the lesser problem, but it was real too: an 8.2 MB blob is permanent in git history, and
+every clone pays for it forever.
 
-The development environment's network policy denies `developers.binance.com`, so this file cannot be
-fetched from a cloud session. It is downloaded on the author's machine and committed.
+## Getting the full document for local use
 
-## Required header
-
-Prepend these lines to the downloaded file, so the provenance travels with it:
-
+```bash
+curl -o docs/vendor/binance-spot-api.txt https://developers.binance.com/en/docs/llms-full.txt
 ```
-# Source:     https://developers.binance.com/en/docs/llms-full.txt
-# Downloaded: YYYY-MM-DD
-# Vendored verbatim. Do not edit. Re-download to update, and commit the diff separately.
-```
+
+`binance-spot-api.txt` is git-ignored. Keep it locally while working on the exchange adapter; it is the
+reference the citations are taken from.
+
+If `curl` fails, the host may be blocked by your network policy — this project's cloud development
+environment denies it, which is why the citations exist as a committed artefact rather than being
+re-derived on demand.
+
+Line numbers in `binance-citations.md` refer to the file exactly as downloaded, with no local edits. Do
+not add a header to it; a prepended header shifts every line number and silently invalidates every
+citation.
 
 ## Rules
 
-- **Verbatim.** Never edited to match what the code expects. If the document and the code disagree, the
-  code is wrong until proven otherwise.
-- **Cited.** A change to the fake venue that makes a failing test pass must quote the line of this file
-  that justifies it, in the commit message (ADR-0009).
-- **Separate commits.** A re-download lands on its own, so that "the vendor changed" and "we changed"
-  are never the same diff.
+- **Quote, never paraphrase.** An entry that summarises what the document means is an opinion with a
+  line number attached.
+- **Spot sections only.** The source file concatenates every Binance product, and the error pages repeat
+  almost identically for each. A citation taken from `/products/wallet/error-code` when the code runs
+  against Spot is a citation of the wrong document that happens to agree.
+- **A change to the fake venue that makes a failing test pass must cite an entry here**, in the commit
+  message (ADR-0009). No citation, no change — otherwise the double gets adjusted to agree with the
+  adapter, which is the exact failure the double exists to prevent.
+- **A protocol constant with no entry here is a guess**, and the comment next to it should say so.

@@ -183,14 +183,63 @@ Written as a list because "we tested it" is not an answer to "how would you know
    a race the fake never produces. Mitigation: the fake can be scripted to deliver the report first, and
    at least one test does so — because "the double is deterministic" must not come to mean "the double
    only ever does the convenient thing".
-4. **The official reference is not in the repository, so the fake encodes my memory.** The agreed
-   mitigation is to vendor Binance's machine-readable documentation into
-   `docs/vendor/binance-spot-api.txt` — downloaded by the author, since this environment cannot reach
-   the host — with the source URL and the download date in a header. Until that file exists, every
-   protocol constant in the fake is a claim with no citation, and the README says so.
+4. **~~The official reference is not in the repository, so the fake encodes my memory.~~** *Closed —
+   cited, with retrieval dates.* `docs/vendor/binance-citations.md` holds the quotations the code
+   depends on, each with its Spot document path, line number and the date the source was retrieved.
+   Every protocol constant in the fake venue now has a citable source rather than a recollection.
 
-Item 4 is the one that worries me most, because it is the only one whose mitigation is not code I can
-write.
+   The full 8.2 MB document is **not** committed, and the reason is itself a decision worth recording:
+   it is © Binance with all rights reserved, and this repository is MIT-licensed, so redistributing it
+   wholesale would licence someone else's reserved-rights work under terms that permit copying and
+   sublicensing. Short attributed quotations for the purpose of documenting an interface are a
+   different thing. `docs/vendor/README.md` has the re-download command; the file is git-ignored.
+
+Item 4 was the one that worried me most, because it was the only one whose mitigation was not code I
+could write. It is closed, and closing it immediately paid for itself — see below.
+
+### What the vendored reference confirmed, and what it corrected
+
+Checked against the file as soon as it landed, before any of the adapter was written:
+
+| Claim | Verdict | Cited at |
+|---|---|---|
+| `-2010 NEW_ORDER_REJECTED` carries `"Duplicate order sent."` meaning *the `clOrdId` is already in use* | confirmed verbatim | citations §2 |
+| the same code also carries `"Account has insufficient balance for requested action."` | confirmed — one code, two opposite handlings | citations §2 |
+| `-2026` is `ORDER_ARCHIVED`, unrelated to duplicate submission | confirmed: *"canceled or expired with no executed qty over 90 days ago"* | citations §3 |
+| "Codes are universal, but messages can vary" | confirmed verbatim | citations §1 |
+| `z` cumulative filled quantity, `Z` cumulative quote quantity | confirmed | citations §4 |
+| average price is `Z / z` | confirmed verbatim: *"Average price can be found by doing `Z` divided by `z`."* | citations §5 |
+| `executionReport` carries a structured reject reason `r`, including `INSUFFICIENT_BALANCES` | confirmed | citations §4, §6 |
+
+Two things the check produced that no amount of care would have:
+
+- **`myTrades` is a per-symbol endpoint.** It refuses a request without `symbol`, so recovery costs one
+  call per symbol rather than one call. ADR-0011's cost estimate was wrong until this was read, and the
+  corrected figure makes its own argument stronger (citations §7, §8).
+- **The citations had to be taken from the right product.** The source document concatenates every
+  Binance product and the error pages repeat almost identically for each; the first copy of the `-2010`
+  table in the file is under `/products/wallet/error-code`. A citation from there would have agreed with
+  the Spot page by coincidence rather than by authority, which is a worse kind of wrong than no citation
+  at all.
+
+So the specification's `-2026` was wrong and my `-2010` was right — but that is not the lesson, because
+the two of us disagreeing was the only reason anybody looked. **The lesson is that neither of us had a
+citation until the file existed.**
+
+And reading it immediately produced a detail neither of us had:
+
+> `"t": -1,  // Trade ID`
+
+`t` is **−1 when the event is not a trade** — a `NEW` or `CANCELED` report carries no trade id, and `n`
+(commission) and `N` (commission asset) are `"0"` and `null` alongside it. Deduplicating on
+`(symbol, tradeId)` without first checking `x == "TRADE"` would therefore insert `(ETHBTC, -1)` as a
+real key, and the *second* non-trade event for that symbol would be silently discarded as a duplicate.
+That defect would have passed every test in the plan, because a fake venue written from the same memory
+would have emitted the same `-1`.
+
+One file, read for ten minutes, turned a confirmed-but-uncited belief into a cited one and caught a bug
+that the double was going to hide. That is the whole argument for the vendoring rule in
+`docs/vendor/README.md`.
 
 ## What we gave up
 

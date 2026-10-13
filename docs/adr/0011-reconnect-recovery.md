@@ -70,8 +70,22 @@ transition table and the terminal-state logic with something that is not a state
 
 ```
 filled_quantity = z
-avg_fill_price  = Z / z        (BigDecimal, explicit scale, HALF_UP; NULL when z = 0)
+avg_fill_price  = Z.divide(z, 18, RoundingMode.HALF_UP)      NULL when z = 0
 ```
+
+**The scale is 18**, matching the column's `NUMERIC(36,18)`, and saying so is the point — "explicit
+scale" without a number is the same vagueness it was meant to replace.
+
+Why 18 and not the quote asset's own precision (2 for USDT, 8 for BTC pairs): the average fill price is
+a **derived figure, not a price we ever send**. Rounding it to the venue's tick size would discard
+information for no benefit and make the stored value disagree with `Z / z` as computed from the same
+two numbers. It would also make the calculation depend on `exchangeInfo` — a per-symbol lookup that
+would have to be fetched, cached and invalidated, introducing a network dependency into arithmetic.
+Storing at the column's full precision keeps the value the most accurate thing the column can hold, and
+leaves rounding to the display edge, where the audience is known.
+
+The consequence to be aware of: an average price at scale 18 is generally **not** a price that could be
+placed at the venue. That is correct — an average of several fills usually is not.
 
 The alternative — accumulate `l` locally — is the natural thing to write and it is wrong in a way that
 cannot be fixed by being careful:
@@ -127,6 +141,14 @@ Persisted in `processed_trades`, with a unique constraint doing the enforcing.
 - **Not the event id, not the order id.** `executionReport` has no stable per-delivery identifier we
   could trust across a reconnect, and one order has many trades.
 
+**The key is only valid for events that are trades.** `executionReport` sets `t` (trade id) to **−1**
+when the event does not describe a fill — a `NEW` or `CANCELED` report — with `n` and `N` empty beside
+it. So the deduplication is applied only when `x == "TRADE"`; writing `(symbol, −1)` into
+`processed_trades` would make the first non-trade event claim a key that every later one collides with,
+and they would be discarded as duplicates. This came out of the vendored reference (ADR-0009), not out
+of reasoning about it, and a fake venue built from the same assumptions would have reproduced the `-1`
+and hidden the defect.
+
 The unique constraint is the mechanism, not a check-then-insert, for the same reason as everywhere else
 in this project: a constraint cannot be forgotten by code written later, and a check-then-insert has a
 race that passes every sequential test.
@@ -138,10 +160,30 @@ implemented twice; it is the same identifier doing the same job in two places.
 
 ## What we gave up
 
-- **Recovery costs up to four REST calls per reconnect**, against an API with a weight budget. A flapping
-  connection therefore burns rate limit at the worst possible moment — when the venue may already be
-  unhealthy. The rate limiter is shared with the submission path, so recovery can throttle new orders.
-  We accepted that: being slow to accept orders is recoverable, being wrong about fills is not.
+- **Recovery costs a number of REST calls that grows with how much is open**, against an API with a
+  weight budget — and the number is considerably worse than it first looks. With `k` local non-terminal
+  orders absent from `openOrders`, spread over `s` symbols:
+
+  ```
+  1 × openOrders  +  k × GET /api/v3/order  +  s × myTrades
+  ```
+
+  `myTrades` is a per-symbol endpoint — it refuses a request without `symbol`
+  (`binance-citations.md` §7) — so the last term cannot be collapsed into one call. Twenty open orders
+  across five pairs is `1 + 20 + 5 = 26` calls, not a handful.
+
+  In weight, using the figures in `binance-citations.md` §8 — `openOrders` without `symbol` is **80**,
+  with `symbol` **6**, `order` **4**, `myTrades` **20** — that example costs `80 + 80 + 100 = 260`
+  weight per reconnect, or `30 + 80 + 100 = 210` if `openOrders` is issued per symbol instead of once
+  unqualified. A connection flapping every few seconds burns that repeatedly, at precisely the moment
+  the venue is least likely to be healthy, and the rate limiter is shared with the submission path — so
+  recovery can throttle new orders, and a 418 would stop both.
+
+  We accepted this, and the real figures make the acceptance a decision rather than an assumption:
+  being slow to accept orders is recoverable, being wrong about fills is not. What the figures do
+  change is the implementation — `openOrders` is issued **per symbol** rather than unqualified, since
+  6 × s beats a flat 80 for any realistic number of pairs, and the per-symbol form is needed for the
+  `myTrades` loop anyway.
 - **The five-minute window is a guess.** Long enough for the disconnect detection gap and clock skew,
   short enough that `myTrades` returns a small page. There is no principled value, and a disconnect
   longer than the window plus the detection gap is handled only because `openOrders` and the per-order
