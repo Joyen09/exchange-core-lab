@@ -379,6 +379,12 @@ The correction in ADR-0001 is the write-up of
 - [ADR-0006 — Publishing events by polling a transactional outbox](docs/adr/0006-transactional-outbox-by-polling.md)
 - [ADR-0007 — Two layers of idempotency, and why one is not enough](docs/adr/0007-two-layer-idempotency.md)
 - [ADR-0008 — `order_events` is the source of truth; `orders` is a projection](docs/adr/0008-order-events-as-the-source-of-truth.md)
+- [ADR-0009 — A fake venue for behaviour, the real testnet for protocol](docs/adr/0009-fake-venue-and-the-real-endpoint.md)
+- [ADR-0010 — Orders reach the venue through an event, not through the request](docs/adr/0010-event-driven-order-submission.md)
+- [ADR-0011 — Recovering after a disconnect: overlap, cumulative values, and `tradeId`](docs/adr/0011-reconnect-recovery.md)
+
+ADR-0004 and ADR-0007 carry Phase 3 corrections: the zero-sum invariant was only correct for
+single-asset entries, and a successful placement now returns 202 rather than 201.
 
 ## Roadmap
 

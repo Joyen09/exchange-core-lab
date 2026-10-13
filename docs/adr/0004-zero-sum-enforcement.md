@@ -106,6 +106,90 @@ reports that as `TransactionSystemException` — not a `DataIntegrityViolationEx
 it and rethrows `LedgerInvariantViolationException` carrying the trigger's own message. Statement-time
 violations are translated normally; only the deferred ones behave this way.
 
+#### Correction (found in Phase 3): the invariant above is only correct for single-asset entries
+
+**The function shown above sums every posting in an entry regardless of asset.** Through Phases 1 and 2
+that was indistinguishable from correct, because every entry the system could produce touched one asset:
+a deposit moves `EXTERNAL(USDT) → AVAILABLE(USDT)`, an order lock moves
+`AVAILABLE(USDT) → LOCKED(USDT)`. The global sum and the per-asset sum were the same number.
+
+A trade is the first entry that is inherently cross-asset. A `BTCUSDT` buy moves USDT out and BTC in,
+and `SUM(amount)` over those postings adds a quantity of bitcoin to a quantity of dollars. The result is
+not merely non-zero — it is meaningless, and the trigger would have rejected every fill the system ever
+settled.
+
+The invariant is therefore restated:
+
+> **Within an entry, the postings of each asset sum to zero.**
+
+This is a **strengthening, not a relaxation.** For a single-asset entry the two statements are
+identical. For a cross-asset entry the old rule can be satisfied by nonsense — `BTC +1, USDT −1` sums to
+zero — while the new rule cannot. Nothing that was previously rejected is now accepted.
+
+The function groups by asset, which requires joining `accounts`, because `postings` does not carry the
+asset itself:
+
+```sql
+SELECT a.asset, SUM(p.amount) AS total
+  FROM postings p JOIN accounts a ON a.id = p.account_id
+ WHERE p.entry_id = target_entry
+ GROUP BY a.asset
+HAVING SUM(p.amount) <> 0
+```
+
+Two obligations came with the change, both met in the V5 migration:
+
+- **A negative test is the most important test of this revision**: an entry whose postings sum to zero
+  overall but not per asset must be rejected. Without it the restatement is a claim no test can
+  distinguish from the old behaviour — the failure mode this project has already been bitten by once
+  (see the correction in ADR-0001).
+- **Every existing entry was re-validated under the new rule** as part of the migration. Had any row
+  failed, that would have been a real data defect inherited from Phase 1, to be reported and not quietly
+  repaired.
+
+#### The counterparty leg, which the first draft of the Phase 3 specification omitted
+
+Stating the invariant per asset is not enough on its own: each asset still needs both sides. A fill is
+not "USDT leaves the locked account and BTC appears in the available one" — the exchange is the
+counterparty, and it has to appear in the entry. One entry per trade, keyed
+`trade:{symbol}:{tradeId}`:
+
+```
+LOCKED(USDT)          −Z      the locked quote actually spent
+EXTERNAL:venue(USDT)  +Z      paid to the exchange
+EXTERNAL:venue(BTC)   −q      received from the exchange
+AVAILABLE(BTC)        +q
+AVAILABLE(BTC)        −n      fee, in whatever asset the venue reports
+FEE(BTC)              +n
+                              USDT: 0   BTC: 0
+```
+
+`AVAILABLE(BTC)` appears twice in one entry. That is expressible only because of the netting rule added
+to ADR-0005 in Phase 1 — accounts are deduplicated and netted before anything is locked or checked — and
+it is a fair illustration of why that rule was worth adding before anything needed it.
+
+#### Non-negativity governs authorisation, not recording
+
+A fee charged in an asset the account does not hold — BNB, typically — drives `AVAILABLE(BNB)` negative.
+**This must not reject the entry.**
+
+The distinction is between two different jobs:
+
+- **Authorisation** — "may this order be placed?" — happens before the fact, when funds are locked, and
+  is where a balance check belongs. Refusing there prevents an overdraft.
+- **Recording** — "what happened?" — happens after the fact. The trade has already executed at the
+  venue; the fee has already been taken. A ledger that refuses to record a completed event in order to
+  protect an invariant does not prevent the overdraft, it merely stops knowing about it, and the system
+  is then wrong *and* unaware.
+
+So the settlement path creates the fee asset's accounts on demand, writes the entry, and lets the
+balance go negative. A negative `AVAILABLE` balance is a genuine condition that deserves attention, and
+Phase 4's reconciler is where attention happens — it is a reconciliation break, not a write error.
+
+This was always implicit in Phase 1: `balance >= 0` is an application rule enforced in the locking path,
+and the database never claimed it (ADR-0005 says so explicitly). Phase 3 is simply the first time the
+difference has consequences.
+
 ### 2. An entry must have at least two postings, deferred to commit
 
 ```sql
