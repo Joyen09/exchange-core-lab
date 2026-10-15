@@ -64,7 +64,10 @@ Four things worth more than a tour of the file tree:
    that survived a whole phase with every observable symptom correct, and what it changed about how
    the tests here are written.
 4. **[The architecture decision records](#architecture-decisions)** — each one has a section on what
-   was given up, because an ADR that only lists benefits is not finished.
+   was given up, because an ADR that only lists benefits is not finished. Two ideas run through all of
+   them and are written up next to the index: [making the mistake impossible to
+   express](#the-design-principle-this-repository-is-built-on), and
+   [what counts as evidence](#the-other-principle-what-counts-as-evidence).
 
 `make demo`, the one-command walkthrough of a full order lifecycle, arrives in Phase 5.
 
@@ -97,71 +100,6 @@ on your machine.
 | Redpanda | 19092 | Kafka API |
 | Prometheus | 19090 | metrics |
 | Grafana | 13000 | dashboards (anonymous viewer access enabled) |
-
-## The design principle this repository is built on
-
-> **Don't remember to avoid the mistake. Make the mistake impossible to express.**
-
-Every rule that depends on somebody remembering it is a rule that holds until the day it doesn't, and
-the day it doesn't is never the day somebody is looking. The same idea therefore shows up at three
-different layers here, deliberately, and it is worth seeing them together rather than meeting each one
-as a local quirk:
-
-| Layer | Mistake to prevent | How it is made inexpressible |
-|---|---|---|
-| **Application startup** | pointing the service at a live exchange | the endpoint allowlist has **no override switch** — no flag, no profile, no environment variable. A non-testnet URL does not start the process, and a test scans the whole repository for any property that could reintroduce one |
-| **Database schema** | writing a trade de-duplication row keyed on a trade id of `-1`, which `executionReport` sends for non-fill events, silently swallowing every later event for that symbol | `CHECK (trade_id >= 0)` on `processed_trades`. The application also checks `x == "TRADE"`, but the constraint is what turns a forgotten check from a silent discard into a loud failure |
-| **Type signature** | querying `openOrders` without a symbol — four times the request weight, and on the recovery path, at the worst possible moment | `fetchOpenOrders(Symbol symbol)` takes the symbol as a parameter. There is no no-argument overload, so the expensive call is not a thing a caller can accidentally write |
-
-The pattern in each case is the same: a comment saying "don't do X" is replaced by a structure in which
-X cannot be written. The ledger follows it too — balances are derived rather than stored, so a stale
-snapshot is not a thing that can exist; `order_events` has `UPDATE` and `DELETE` revoked *and* a trigger
-that raises, so an edited history is not a thing that can be written.
-
-The cost is real and worth naming: each of these is less flexible than a convention, and the day a
-legitimate reason appears to do the forbidden thing, the structure has to be changed rather than
-bypassed. That is the trade, and it is taken on purpose — see
-[the most useful bug in this repository](#the-most-useful-bug-in-this-repository) for what the
-alternative looked like when it failed.
-
-## The other principle: what counts as evidence
-
-The section above is about **prevention** — how the system is built so a mistake cannot be written.
-This one is about **verification**, and it is a separate idea that happens to have come up just as
-often: how do you know a thing you believe is actually true?
-
-Four times in this project, something looked like confirmation and was confirming a different claim:
-
-| What happened | What looked like evidence | What it actually established |
-|---|---|---|
-| `executionReport` sets `t` to `-1` for non-fill events | a protocol constant everyone had reasoned their way to | that nobody had read the primary source |
-| the `-2010` error table | an error table whose contents matched | that a copy under `/products/wallet/` agrees by coincidence, not by authority |
-| the V5 migration's validation pass | "it ran without aborting" | possibly that it was checking the wrong thing |
-| the migration's abort message | a green `hasMessageContaining` assertion | that one fragment of the message matched — the count in it was wrong, and nobody saw |
-
-The shape is identical every time: **a check passes, and what it checked is not the claim being made.**
-The guard-registration bug in [the section below](#the-most-useful-bug-in-this-repository) is the same
-shape and the most expensive instance of it — a test asserted *that* startup failed, nobody asserted
-*where*, and the two are different claims.
-
-What this has turned into, in practice:
-
-- **A negative control for anything that is supposed to catch something.** Before trusting a rule, run
-  the case it is meant to reject against the *old* rule and confirm it passes there. V5's probe did
-  exactly this and is written up in [ADR-0004](docs/adr/0004-zero-sum-enforcement.md); without it, the
-  new test would have been green against both rules and measured nothing.
-- **Assert the value, not a substring of the message it appears in.** The migration reports the number
-  of unbalanced entry/asset combinations. A `hasMessageContaining` check let a wrong count through, so
-  the count is now asserted as a number — and a view, `unbalanced_entry_assets`, makes it queryable
-  rather than only printable.
-- **Cite the source, and cite the right one.** Protocol constants live in
-  [`docs/vendor/binance-citations.md`](docs/vendor/binance-citations.md) with document paths, line
-  numbers and a retrieval date. A constant with no entry there is a guess, and the comment beside it
-  says so.
-
-The two principles answer different questions. The first is *how is this built*; this one is *how do
-you know it works*. They are kept apart here because conflating them produces the most comfortable
-failure mode in engineering: a well-designed system that nobody has actually checked.
 
 ## Safety guardrails
 
@@ -437,6 +375,71 @@ Two accommodations exist for restricted networks, neither of which changes the d
   it is a no-op on a normal network; drop your proxy's PEM in there if dependency downloads fail
   with `PKIX path building failed`. Certificates placed there are git-ignored.
 
+## The design principle this repository is built on
+
+> **Don't remember to avoid the mistake. Make the mistake impossible to express.**
+
+Every rule that depends on somebody remembering it is a rule that holds until the day it doesn't, and
+the day it doesn't is never the day somebody is looking. The same idea therefore shows up at three
+different layers here, deliberately, and it is worth seeing them together rather than meeting each one
+as a local quirk:
+
+| Layer | Mistake to prevent | How it is made inexpressible |
+|---|---|---|
+| **Application startup** | pointing the service at a live exchange | the endpoint allowlist has **no override switch** — no flag, no profile, no environment variable. A non-testnet URL does not start the process, and a test scans the whole repository for any property that could reintroduce one |
+| **Database schema** | writing a trade de-duplication row keyed on a trade id of `-1`, which `executionReport` sends for non-fill events, silently swallowing every later event for that symbol | `CHECK (trade_id >= 0)` on `processed_trades`. The application also checks `x == "TRADE"`, but the constraint is what turns a forgotten check from a silent discard into a loud failure |
+| **Type signature** | querying `openOrders` without a symbol — four times the request weight, and on the recovery path, at the worst possible moment | `fetchOpenOrders(Symbol symbol)` takes the symbol as a parameter. There is no no-argument overload, so the expensive call is not a thing a caller can accidentally write |
+
+The pattern in each case is the same: a comment saying "don't do X" is replaced by a structure in which
+X cannot be written. The ledger follows it too — balances are derived rather than stored, so a stale
+snapshot is not a thing that can exist; `order_events` has `UPDATE` and `DELETE` revoked *and* a trigger
+that raises, so an edited history is not a thing that can be written.
+
+The cost is real and worth naming: each of these is less flexible than a convention, and the day a
+legitimate reason appears to do the forbidden thing, the structure has to be changed rather than
+bypassed. That is the trade, and it is taken on purpose — see
+[the most useful bug in this repository](#the-most-useful-bug-in-this-repository) for what the
+alternative looked like when it failed.
+
+## The other principle: what counts as evidence
+
+The section above is about **prevention** — how the system is built so a mistake cannot be written.
+This one is about **verification**, and it is a separate idea that happens to have come up just as
+often: how do you know a thing you believe is actually true?
+
+Four times in this project, something looked like confirmation and was confirming a different claim:
+
+| What happened | What looked like evidence | What it actually established |
+|---|---|---|
+| `executionReport` sets `t` to `-1` for non-fill events | a protocol constant everyone had reasoned their way to | that nobody had read the primary source |
+| the `-2010` error table | an error table whose contents matched | that a copy under `/products/wallet/` agrees by coincidence, not by authority |
+| the V5 migration's validation pass | "it ran without aborting" | possibly that it was checking the wrong thing |
+| the migration's abort message | a green `hasMessageContaining` assertion | that one fragment of the message matched — the count in it was wrong, and nobody saw |
+
+The shape is identical every time: **a check passes, and what it checked is not the claim being made.**
+The guard-registration bug in [the section below](#the-most-useful-bug-in-this-repository) is the same
+shape and the most expensive instance of it — a test asserted *that* startup failed, nobody asserted
+*where*, and the two are different claims.
+
+What this has turned into, in practice:
+
+- **A negative control for anything that is supposed to catch something.** Before trusting a rule, run
+  the case it is meant to reject against the *old* rule and confirm it passes there. V5's probe did
+  exactly this and is written up in [ADR-0004](docs/adr/0004-zero-sum-enforcement.md); without it, the
+  new test would have been green against both rules and measured nothing.
+- **Assert the value, not a substring of the message it appears in.** The migration reports the number
+  of unbalanced entry/asset combinations. A `hasMessageContaining` check let a wrong count through, so
+  the count is now asserted as a number — and a view, `unbalanced_entry_assets`, makes it queryable
+  rather than only printable.
+- **Cite the source, and cite the right one.** Protocol constants live in
+  [`docs/vendor/binance-citations.md`](docs/vendor/binance-citations.md) with document paths, line
+  numbers and a retrieval date. A constant with no entry there is a guess, and the comment beside it
+  says so.
+
+The two principles answer different questions. The first is *how is this built*; this one is *how do
+you know it works*. They are kept apart here because conflating them produces the most comfortable
+failure mode in engineering: a well-designed system that nobody has actually checked.
+
 ## Architecture decisions
 
 The correction in ADR-0001 is the write-up of
@@ -479,7 +482,11 @@ Honest list, expanded as the project grows:
 4. **Testnet only, permanently.** There is no supported path to a production venue, and adding one
    would mean removing the guardrail this project is partly built to demonstrate.
 5. **Balances are derived, not cached.** Summing postings is correct but does not scale; the
-   trade-off and its eventual fix (materialised views) are deferred to Phase 5 on purpose.
+   trade-off and its eventual fix (materialised views) are deferred to Phase 5 on purpose. The
+   `unbalanced_entry_assets` view is the same debt in a second place: it joins and groups the whole
+   `postings` table with no `WHERE`, and Phase 4's reconciler will query it on a timer rather than for
+   one entry at a time. Both consumers depend on the same derivation, and both are fixed together by
+   the materialised view in Phase 5 — noted now rather than discovered then.
 6. **Single instance assumed, with one exception.** Nothing here is designed for horizontal
    scale-out — except the outbox publisher, which claims rows with `FOR UPDATE SKIP LOCKED` and is
    therefore safe to run in several instances at once. (An earlier version of this list predicted it
