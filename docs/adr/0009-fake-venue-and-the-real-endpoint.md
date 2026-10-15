@@ -226,6 +226,29 @@ So the specification's `-2026` was wrong and my `-2010` was right — but that i
 the two of us disagreeing was the only reason anybody looked. **The lesson is that neither of us had a
 citation until the file existed.**
 
+### This document broke its own rule, and the rule caught it
+
+The interface sketched above, in the Decision section, was originally written as:
+
+```java
+OrderSnapshot fetchOrder(ClientOrderId id);
+```
+
+**That method cannot exist.** The venue's query endpoint lists `symbol` as mandatory alongside the
+order id (`binance-citations.md` §4 of the parameter tables; the same is true of cancel, and
+`myTrades` refuses a request without one). There is no lookup by client order id alone, so this ADR
+specified a method the API does not permit — in a document whose entire subject is that protocol
+constants need citations rather than recollection.
+
+It was found the same way as everything else here: by reading the reference while implementing the
+interface, not by reasoning about it. The signature is now
+`fetchOrder(Symbol symbol, ClientOrderId clientOrderId)`.
+
+Recorded rather than quietly corrected, because the detail that makes it worth recording is *where* it
+happened. An ADR arguing for citations, written without one, is the strongest available evidence that
+the discipline has to be mechanical — knowing the rule and believing it is not enough, including for
+whoever is writing the rule down.
+
 And reading it immediately produced a detail neither of us had:
 
 > `"t": -1,  // Trade ID`

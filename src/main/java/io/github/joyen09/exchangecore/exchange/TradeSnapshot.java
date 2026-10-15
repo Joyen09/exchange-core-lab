@@ -17,6 +17,13 @@ import java.time.Instant;
  * {@code TradeSnapshot} from such an event is a bug, and the only thing worse than it failing here is
  * it succeeding: {@code (symbol, -1)} would be written to {@code processed_trades} as a real key, and
  * every later non-fill event for that symbol would be silently discarded as a duplicate.
+ *
+ * <p><b>This boundary is stated twice on purpose</b> — here, and as {@code CHECK (trade_id >= 0)} on
+ * {@code processed_trades} in V5. The type stops the value being built; the constraint stops it being
+ * stored by anything that bypassed the type. Two statements of one rule drift, so
+ * {@code TradeIdBoundaryIT} asserts both from the same constants and fails if either side is changed
+ * alone. Note that zero is a <em>real</em> trade id: a {@code > 0} guard is the easy thing to write
+ * here and would reject a legitimate fill.
  */
 public record TradeSnapshot(
         Symbol symbol,
