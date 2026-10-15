@@ -140,6 +140,60 @@ class ArchitectureRulesTest {
             .haveFullyQualifiedName("org.springframework.web.client.RestClient")
             .because("the endpoint allowlist only holds if every outbound call goes through the guarded module");
 
+    /**
+     * ADR-0009, direction one: no Binance vocabulary escapes the adapter.
+     *
+     * <p>The fake venue is a substitute for the real one only while the rest of the system cannot tell
+     * them apart. A single {@code -2010} or {@code executionReport} leaking into {@code submitter} would
+     * mean the double has to reproduce it too, and the double would have become a second implementation
+     * of Binance rather than a stand-in for a venue.
+     *
+     * <p>Matched on the name rather than on a package, deliberately: the mistake this catches is someone
+     * putting {@code BinanceOrderResponse} somewhere convenient, and a package rule would not see a class
+     * dropped into the wrong one.
+     */
+    @ArchTest
+    static final ArchRule binanceVocabularyStaysInsideTheAdapter = noClasses()
+            .that()
+            .resideOutsideOfPackage("io.github.joyen09.exchangecore.exchange..")
+            .should()
+            .dependOnClassesThat()
+            .haveSimpleNameContaining("Binance")
+            .because("the rest of the system talks to a venue, not to Binance (ADR-0009)");
+
+    /**
+     * ADR-0009, direction two: the test double does not exist in production code.
+     *
+     * <p>The source-set split already stops {@code src/main} compiling against {@code src/test}, so the
+     * failure this guards is the other one — a fake moved into {@code main} because something there
+     * found it useful. At that point the double is shipping, and the suite that was proving behaviour
+     * against a substitute is proving it against itself.
+     */
+    @ArchTest
+    static final ArchRule noTestDoubleShipsInProduction = noClasses()
+            .should()
+            .resideInAPackage("..fakevenue..")
+            .orShould()
+            .haveSimpleNameStartingWith("Fake")
+            .orShould()
+            .haveSimpleNameStartingWith("Stub")
+            .because("the fake venue is evidence about the adapter, not part of it (ADR-0009)");
+
+    /**
+     * The adapter is a leaf. It knows the order vocabulary — a side and a status are domain words, not
+     * Binance words — and nothing else. Reaching into the ledger, the outbox or the API from here would
+     * put business decisions inside the transport, which is exactly what SPEC §Modules says this package
+     * does not do.
+     */
+    @ArchTest
+    static final ArchRule theAdapterKnowsOnlyTheOrderVocabulary = noClasses()
+            .that()
+            .resideInAPackage("io.github.joyen09.exchangecore.exchange..")
+            .should()
+            .dependOnClassesThat()
+            .resideInAnyPackage("..ledger..", "..outbox..", "..idempotency..", "..api..", "..recon..")
+            .because("the exchange module owns the wire and has no opinion about whether an order should exist");
+
     /** SPEC §5.1. A float or double anywhere near money is a bug, so none exist anywhere. */
     @ArchTest
     static final ArchRule moneyIsNeverAFloatingPointNumber = fields()
