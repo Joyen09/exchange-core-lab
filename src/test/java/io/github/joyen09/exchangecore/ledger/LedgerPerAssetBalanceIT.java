@@ -75,12 +75,64 @@ class LedgerPerAssetBalanceIT {
                 // violation — the same shape ADR-0004 documents for the original trigger.
                 .isInstanceOf(TransactionSystemException.class)
                 .rootCause()
-                .hasMessageContaining("unbalanced")
-                // The message names the offending asset, because "this entry is unbalanced" is not
-                // enough to act on when an entry legitimately spans three of them.
-                .hasMessageContaining("BTC");
+                // The whole message, not a fragment of it. The amount and the asset are the parts an
+                // operator acts on, and a substring match would pass just as happily with either of
+                // them wrong — which is not a hypothetical: a partial match on this project's
+                // migration output let a wrong count go unnoticed, and the assertion reported green.
+                .satisfies(cause -> assertThat(firstLineOf(cause))
+                        .isEqualTo("ERROR: entry %s is unbalanced in BTC: postings sum to 1.000000000000000000"
+                                .formatted(entryId)));
 
         assertThat(countPostings(entryId)).isZero();
+    }
+
+    /**
+     * The count, asserted as a number rather than skimmed by a substring.
+     *
+     * <p>One cross-asset entry is unbalanced in <em>each</em> of its assets, so it produces two rows,
+     * not one. That distinction is the substance of what the migration reports, and it is exactly the
+     * thing a {@code hasMessageContaining} check reads straight past.
+     *
+     * <p>No trigger is tampered with to get here. The zero-sum constraint is deferred to commit, so an
+     * entry is legitimately unbalanced in the middle of its own transaction — the view can be read
+     * there, and the transaction then rolls back leaving nothing behind.
+     */
+    @Test
+    @DisplayName("one cross-asset entry is reported once per asset, so the count is two")
+    void theUnbalancedViewCountsCombinationsNotEntries() {
+        UUID entryId = UUID.randomUUID();
+
+        transactions.executeWithoutResult(status -> {
+            insertEntry(entryId, "counting-" + entryId);
+            insertPosting(entryId, btcAvailable, new BigDecimal("1"));
+            insertPosting(entryId, usdtAvailable, new BigDecimal("-1"));
+
+            assertThat(unbalancedCombinations(entryId))
+                    .as("two assets, each unbalanced, from a single entry")
+                    .isEqualTo(2);
+            assertThat(unbalancedAssets(entryId)).containsExactly("BTC", "USDT");
+            assertThat(unbalancedEntries(entryId)).as("but only one entry").isEqualTo(1);
+
+            status.setRollbackOnly();
+        });
+
+        assertThat(countPostings(entryId)).as("nothing survives the rollback").isZero();
+    }
+
+    @Test
+    @DisplayName("the view is empty for a healthy database")
+    void theUnbalancedViewIsEmptyWhenEverythingBalances() {
+        // What the migration's validation pass asserts about existing data, as a standing check rather
+        // than a one-off. If this ever fails, the "all balanced" claim in V5 has stopped being true.
+        transactions.executeWithoutResult(status -> {
+            UUID entryId = UUID.randomUUID();
+            insertEntry(entryId, "healthy-" + entryId);
+            insertPosting(entryId, usdtAvailable, new BigDecimal("100"));
+            insertPosting(entryId, usdtExternal, new BigDecimal("-100"));
+        });
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM unbalanced_entry_assets", Long.class))
+                .isZero();
     }
 
     @Test
@@ -128,7 +180,9 @@ class LedgerPerAssetBalanceIT {
                 }))
                 .isInstanceOf(TransactionSystemException.class)
                 .rootCause()
-                .hasMessageContaining("BNB");
+                .satisfies(cause -> assertThat(firstLineOf(cause))
+                        .isEqualTo("ERROR: entry %s is unbalanced in BNB: postings sum to -0.000000000000000001"
+                                .formatted(entryId)));
 
         assertThat(countPostings(entryId)).isZero();
     }
@@ -173,7 +227,9 @@ class LedgerPerAssetBalanceIT {
                 }))
                 .isInstanceOf(TransactionSystemException.class)
                 .rootCause()
-                .hasMessageContaining("USDT");
+                .satisfies(cause -> assertThat(firstLineOf(cause))
+                        .isEqualTo("ERROR: entry %s is unbalanced in USDT: postings sum to 60.000000000000000000"
+                                .formatted(unbalanced)));
     }
 
     @Test
@@ -194,6 +250,37 @@ class LedgerPerAssetBalanceIT {
         });
 
         assertThat(countPostings(entryId)).isEqualTo(2);
+    }
+
+    /**
+     * The message PostgreSQL raised, without the {@code Where:} frame it appends.
+     *
+     * <p>That frame is PL/pgSQL's stack context and carries a line number inside the trigger function,
+     * so pinning it would make any edit to the function body break three tests for no benefit. The
+     * first line is the message this project wrote, and it is asserted whole — the asset and the
+     * amount are what an operator acts on, and a substring check would pass with either of them wrong.
+     */
+    private static String firstLineOf(Throwable cause) {
+        return cause.getMessage().lines().findFirst().orElse("");
+    }
+
+    private long unbalancedCombinations(UUID entryId) {
+        return jdbc.queryForObject(
+                "SELECT count(*) FROM unbalanced_entry_assets WHERE entry_id = ?", Long.class, entryId);
+    }
+
+    private long unbalancedEntries(UUID entryId) {
+        return jdbc.queryForObject(
+                "SELECT count(DISTINCT entry_id) FROM unbalanced_entry_assets WHERE entry_id = ?",
+                Long.class,
+                entryId);
+    }
+
+    private java.util.List<String> unbalancedAssets(UUID entryId) {
+        return jdbc.queryForList(
+                "SELECT asset FROM unbalanced_entry_assets WHERE entry_id = ? ORDER BY asset",
+                String.class,
+                entryId);
     }
 
     private void insertEntry(UUID entryId, String idempotencyKey) {

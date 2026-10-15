@@ -63,6 +63,33 @@ $$ LANGUAGE plpgsql;
 
 
 -- ---------------------------------------------------------------------------------------------
+-- 1b. The same rule, as something that can be queried.
+--
+-- The migration below aborts when this view is non-empty, and the abort message tells the operator
+-- to select from it. An error that names a problem but gives no way to look at it is an error that
+-- gets worked around.
+--
+-- Phase 4's reconciler reads this too: "which entries do not balance" is a reconciliation question
+-- and should have exactly one definition, not one in a migration and another in Java.
+-- ---------------------------------------------------------------------------------------------
+CREATE VIEW unbalanced_entry_assets AS
+SELECT p.entry_id,
+       a.asset,
+       SUM(p.amount) AS total
+  FROM postings p
+  JOIN accounts a ON a.id = p.account_id
+ GROUP BY p.entry_id, a.asset
+HAVING SUM(p.amount) <> 0;
+
+COMMENT ON VIEW unbalanced_entry_assets IS
+    'Entry/asset combinations that violate the per-asset zero-sum rule. Empty in a healthy database. '
+    'One unbalanced cross-asset entry appears here once per asset it is unbalanced in, so the row '
+    'count is combinations, not entries.';
+
+GRANT SELECT ON unbalanced_entry_assets TO exchange_core_app;
+
+
+-- ---------------------------------------------------------------------------------------------
 -- 2. Re-validate every entry that already exists.
 --
 -- A migration that changes an invariant and does not check the existing rows is asserting something
@@ -76,26 +103,26 @@ $$ LANGUAGE plpgsql;
 DO $$
 DECLARE
     broken      INT;
+    entries_hit INT;
     sample      TEXT;
     checked     INT;
 BEGIN
     SELECT count(*) INTO checked FROM entries;
 
-    SELECT count(*), COALESCE(string_agg(DISTINCT detail, '; '), '')
-      INTO broken, sample
-      FROM (
-          SELECT p.entry_id,
-                 format('entry %s asset %s sums to %s', p.entry_id, a.asset, SUM(p.amount)) AS detail
-            FROM postings p
-            JOIN accounts a ON a.id = p.account_id
-           GROUP BY p.entry_id, a.asset
-          HAVING SUM(p.amount) <> 0
-      ) AS failures;
+    SELECT count(*),
+           count(DISTINCT entry_id),
+           COALESCE(string_agg(format('entry %s asset %s sums to %s', entry_id, asset, total), '; '), '')
+      INTO broken, entries_hit, sample
+      FROM unbalanced_entry_assets;
 
     IF broken > 0 THEN
         RAISE EXCEPTION
-            'V5 aborted: % existing entry/asset combinations are unbalanced under the per-asset rule. %',
-            broken, sample
+            'V5 aborted: % unbalanced entry/asset combinations across % entries. %  '
+            'These entries predate the per-asset rule and must be judged and corrected by a person: '
+            'the migration will not guess at what they were meant to be, for the same reason the '
+            'reconciler never auto-repairs a break (ADR-0004). Run '
+            'SELECT * FROM unbalanced_entry_assets; to see all of them.',
+            broken, entries_hit, sample
             USING ERRCODE = '23514';
     END IF;
 
