@@ -261,6 +261,20 @@ not read. A test asserts that every field the adapter reads is present and non-n
 which catches the opposite error — reading a field the venue does not actually send, which otherwise
 shows up as a null that the fake obligingly provides.
 
+**Strict parsing is on in the fake-venue tests too, and that is the more important half.** Once the
+fixtures are real payloads, the fake-venue suite is parsing the same bytes the venue sends, so it can
+catch a field the model fails to cover — without waiting for somebody to run a test that is skipped by
+default. Leaving strictness only on the opt-in path would put the guarantee behind a credential and a
+manual command, which is precisely the state item 1 describes: a check that exists, and does not run.
+
+So the setting differs by purpose rather than by implementation:
+
+| Path | Unknown field | Why |
+|---|---|---|
+| production | counted and logged, never fatal | a venue adding a field must not take the adapter down |
+| fake-venue tests | **fails the test** | the fixtures are real payloads; an unknown field means the model is behind, and CI should say so today |
+| opt-in testnet test | **fails the test** | the only place that sees a field Binance added since the fixtures were captured |
+
 #### Meaning is not closable, and this ADR has the scar to prove it
 
 None of the three mechanisms above would have caught `"t": -1`. The field is present in every fixture,

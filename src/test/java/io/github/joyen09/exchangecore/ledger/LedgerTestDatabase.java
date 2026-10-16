@@ -39,6 +39,7 @@ final class LedgerTestDatabase {
         if (applicationDataSource != null) {
             return;
         }
+        io.github.joyen09.exchangecore.support.DockerPreflight.require();
         CONTAINER.start();
 
         // The owner: a superuser, used for migrations and test fixtures only — never for exercising

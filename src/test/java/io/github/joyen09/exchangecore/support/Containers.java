@@ -33,6 +33,7 @@ public final class Containers {
 
     public static synchronized PostgreSQLContainer<?> postgres() {
         if (!POSTGRES.isRunning()) {
+            DockerPreflight.require();
             POSTGRES.start();
         }
         return POSTGRES;
@@ -40,6 +41,7 @@ public final class Containers {
 
     public static synchronized RedpandaContainer redpanda() {
         if (!REDPANDA.isRunning()) {
+            DockerPreflight.require();
             REDPANDA.start();
         }
         return REDPANDA;

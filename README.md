@@ -496,9 +496,9 @@ Honest list, expanded as the project grows:
    suite also needs a Docker daemon that stays up: it crashed five times while this phase was being
    built, each time turning the whole integration suite red at once — around seventy failures, all of
    them `DockerClientProviderStrategy` unable to find a strategy rather than anything about the code.
-   On a resource-constrained machine, treat a sudden mass failure of every Testcontainers test as an
-   environment symptom and check `docker info` before reading the stack traces. Restarting the daemon
-   and re-running is the whole fix.
+   The build now checks for a reachable daemon before any test runs and stops with one message saying
+   so, rather than letting every Testcontainers test fail separately; `-PskipDockerCheck` runs the unit
+   tests without one. Restarting the daemon and re-running is the whole fix.
 8. **No venue behind the order service yet.** Orders are accepted, validated, locked against the
    ledger, persisted and published, but nothing submits them anywhere: `PENDING → SUBMITTED` and
    everything downstream of it is driven by tests, not by an exchange. Phase 3 supplies the adapter.
