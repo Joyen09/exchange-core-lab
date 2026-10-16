@@ -460,8 +460,7 @@ The cleanest specimen first, because it takes one sentence:
 >
 > **You can believe you are testing something while testing a change that was never made.**
 
-That is the whole pattern, and it has turned up six times here, each time taking longer to explain
-than the last:
+That is the whole pattern, and it has turned up seven times here:
 
 | What happened | What looked like evidence | What it actually established |
 |---|---|---|
@@ -471,6 +470,7 @@ than the last:
 | the `-2010` error table | an error table whose contents matched | that a copy under `/products/wallet/` agrees by coincidence, not by authority |
 | the V5 migration's validation pass | "it ran without aborting" | possibly that it was checking the wrong thing |
 | the migration's abort message | a green `hasMessageContaining` assertion | that one fragment of the message matched — the count in it was wrong, and nobody saw |
+| `firstArrival < System.nanoTime()` | a passing assertion about event ordering | nothing: it is true whenever any event arrived. The first one here found by reading a diff rather than by running something |
 
 Those two are a pair, and between them they cover the ways a green can lie: the first is **a change
 that never happened**, the second is **a run that never happened**. Neither leaves a mark. The rest of
@@ -487,6 +487,17 @@ What this has turned into, in practice:
   the case it is meant to reject against the *old* rule and confirm it passes there. V5's probe did
   exactly this and is written up in [ADR-0004](docs/adr/0004-zero-sum-enforcement.md); without it, the
   new test would have been green against both rules and measured nothing.
+- **A test that something _can_ happen needs a partner showing it does not _always_ happen.** The two
+  that exist here were each a line away from being decorative:
+
+  | The claim | Its partner | What the partner rules out |
+  |---|---|---|
+  | the same seed produces the same event sequence | a *different* seed produces a different one | a script that ignores the seed entirely |
+  | the venue can deliver the execution report before the REST response | by default it delivers the response first | a venue that always sends the report first, which is unrealistic in a new direction |
+
+  This is the negative control's twin. The first asks *can this test fail?*; this asks *is the thing it
+  observed ever absent?* A capability that is always on is not a capability, and a test asserting one
+  is measuring a constant.
 - **Assert the value, not a substring of the message it appears in.** The migration reports the number
   of unbalanced entry/asset combinations. A `hasMessageContaining` check let a wrong count through, so
   the count is now asserted as a number — and a view, `unbalanced_entry_assets`, makes it queryable
