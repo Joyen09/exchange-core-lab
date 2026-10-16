@@ -68,6 +68,13 @@ are impossible to record for the same reason they are impossible to test. Worse,
 silently: when Binance changes a field, the recording keeps the old one and the suite stays green while
 production breaks. It has option B's fidelity problem with a longer fuse and no script.
 
+**Rejected as a source of scenarios — and then partly adopted for something else.** The paragraph above
+is an argument against recordings *deciding what happens*, which they cannot do. It is not an argument
+against recordings *supplying the bytes*. Under "Shape and meaning" below, the fake venue answers with
+recorded payloads while a script decides the timing, and `make testnet-check` re-captures and diffs them
+so the staleness objection above is answered rather than accepted. Scripted timing, recorded bytes:
+the two halves of option C can be taken separately, and only one of them was ever the problem.
+
 ### D. Both, with the work divided by what each can prove — chosen
 
 - **Behaviour** — ordering, recovery, idempotency, retry, rate limiting — is proven against the fake
@@ -169,10 +176,10 @@ path pays for a lookup.
 Written as a list because "we tested it" is not an answer to "how would you know":
 
 1. **The fake implements a field the same wrong way the adapter reads it, and the opt-in test never
-   touches that field.** The most likely shape: an optional field that is absent in the simple cases the
-   opt-in test exercises and present in the ones only the fake produces. Mitigation: the opt-in test
-   asserts on *deserialisation of the full response object*, not on the two or three fields a happy path
-   needs.
+   touches that field.** This one is two different risks wearing one description, and separating them is
+   what makes it answerable — see "Shape and meaning" immediately below. The shape half is closed by
+   three mechanisms; the meaning half cannot be closed by any test and is the standing risk of this
+   whole approach.
 2. **The fake's state machine is more forgiving than the real venue's.** For instance, if the real venue
    refuses a cancel on an order that is already `PENDING_CANCEL` and the fake accepts it, the adapter
    never learns to handle the refusal. Mitigation: the fake refuses everything the documentation says is
@@ -195,7 +202,83 @@ Written as a list because "we tested it" is not an answer to "how would you know
    different thing. `docs/vendor/README.md` has the re-download command; the file is git-ignored.
 
 Item 4 was the one that worried me most, because it was the only one whose mitigation was not code I
-could write. It is closed, and closing it immediately paid for itself — see below.
+could write. It is closed, and closing it immediately paid for itself — see below. After that, item 1's
+meaning half is what is left, and it is left for the same reason.
+
+### Shape and meaning: item 1, taken apart
+
+"The double is wrong in the same way the adapter is wrong" covers two failures that need completely
+different answers:
+
+- **Shape** — a field name misspelled, a number read as a string, a field the adapter never reads, a
+  field the adapter reads that the venue does not actually send.
+- **Meaning** — the name is right, the type is right, the value is read correctly, and what it *means*
+  is misunderstood.
+
+`"t": -1` is the second kind. Nobody misspelled `t`. Nobody read it as the wrong type. The defect was
+that nobody knew it could be `-1`, and **it would pass any assertion about deserialising the full
+response object** — which was this ADR's original mitigation for item 1, and is therefore a mitigation
+aimed at only one of the two halves.
+
+#### Shape is closable, by three mechanisms
+
+**1. The fake replays recorded payloads; it does not compose responses.**
+
+The root problem is that two implementations each derive the wire format from one person's reading, so a
+shared misunderstanding is invisible by construction. The fix is to remove the second derivation: each
+endpoint and each event type has a stored payload fixture, the fake venue answers *with the fixture*,
+and the adapter deserialises *that same fixture*. There is then one statement of the wire format in the
+repository rather than two that have to agree.
+
+This does not weaken the double. The fake still owns timing and state transitions, which is what the
+chaos, out-of-order and redelivery scripting is actually made of; it simply stops being an author of
+JSON. Note that option C above — record and replay — was rejected as a **source of scenarios**, because
+recordings cannot produce the three situations that only a script can. Using recordings as
+**serialisation fixtures** is a different use of the same artefact, and the two coexist: scripted
+timing, recorded bytes.
+
+Fixture provenance, in order of preference: captured from a real testnet session by `make
+testnet-check` when credentials are available; otherwise the example payloads in Binance's own
+documentation, committed with a citation into `docs/vendor/binance-citations.md` like every other
+protocol fact.
+
+**2. `make testnet-check` re-captures fixtures and diffs them against the committed ones.**
+
+This removes the objection that killed option C. A cassette goes stale silently; a cassette that is
+re-recorded and compared does not. When Binance adds, renames or retypes a field, the diff is red and
+somebody reads it — rather than the suite staying green against a recording of a protocol that no
+longer exists.
+
+**3. The opt-in path deserialises with `FAIL_ON_UNKNOWN_PROPERTIES` enabled, and asserts the converse.**
+
+Strict parsing is wrong in production — a venue adding a field must not take the adapter down, so there
+it is a counter and a log line. In the opt-in test it is exactly right, and it makes item 1's precise
+wording *"the opt-in test never touches that field"* impossible by definition: any field the model does
+not cover fails that test.
+
+The converse needs its own assertion, because strictness only catches fields the venue sends and we do
+not read. A test asserts that every field the adapter reads is present and non-null in the fixture,
+which catches the opposite error — reading a field the venue does not actually send, which otherwise
+shows up as a null that the fake obligingly provides.
+
+#### Meaning is not closable, and this ADR has the scar to prove it
+
+None of the three mechanisms above would have caught `"t": -1`. The field is present in every fixture,
+correctly named, correctly typed, and read by the adapter. Strict parsing passes. The converse
+assertion passes. The diff is clean. The value is simply understood to mean something it does not.
+
+The only thing that reduces this risk is the citation discipline — every protocol constant carrying a
+line reference rather than a belief — and the discipline is not mechanical, which is why
+`docs/vendor/binance-citations.md` exists and why changes to the fake venue must cite it.
+
+How far that gets us is best judged by this document's own record: it argued for citations, and then
+specified `fetchOrder(ClientOrderId)`, a method the API does not permit, because nobody had read the
+parameter table. Knowing the rule is not the same as following it, including for whoever wrote it down.
+
+**So the honest statement of item 1 is:** the shape half is closed by a single source of wire format,
+strict unknown-field handling and a must-read-field assertion; the meaning half has no test that can
+close it, only a discipline that lowers the odds — and this ADR has already violated that discipline
+once.
 
 ### What the vendored reference confirmed, and what it corrected
 
@@ -280,6 +363,11 @@ that the double was going to hide. That is the whole argument for the vendoring 
   and one of them is to change the fake. That temptation is strongest exactly when the adapter is
   wrong. The rule adopted here: **a change to the fake venue that makes a failing test pass must cite
   the documentation line that justifies it, in the commit message.** No citation, no change.
+- **Fixtures are a third thing to keep current.** The payload fixtures that give the wire format a single
+  definition only stay true while somebody re-captures them, and between two runs of
+  `make testnet-check` they are exactly the stale cassette this ADR rejected option C for. The
+  difference is that staleness now ends in a visible diff instead of a green suite, which is a smaller
+  claim than "solved" and is the one being made.
 - **Rate-limit behaviour is tested against a simulation of a policy, not the policy.** The fake tracks
   weight and answers 429 and 418 as documented. Whether Binance's real accounting agrees with ours —
   which endpoints cost what — is unverified until someone runs the opt-in test hard enough to find out,
