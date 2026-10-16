@@ -55,7 +55,51 @@ tasks.withType<Test> {
         events("passed", "skipped", "failed")
         showStandardStreams = false
     }
+
+    // Fail before a single test runs if Docker is not there.
+    //
+    // Nearly every test here needs Testcontainers, so a dead daemon turns the whole suite red at once
+    // — about seventy failures, each with a DockerClientProviderStrategy stack trace and none about
+    // the code. That happened five times while Phase 3 was being built, and the cost each time was the
+    // minutes spent establishing that none of the failures was anyone's fault.
+    //
+    // A JUnit-level check was tried first and is kept for IDE runs (DockerPreflight), but it is not
+    // enough on its own: Gradle prints only the exception's class name, so the actionable message was
+    // invisible and a developer still got one identical line per test saying nothing. The gate belongs
+    // here, where one message can be printed before anything starts.
+    //
+    // -PskipDockerCheck exists for running only the unit tests, which genuinely do not need a daemon.
+    doFirst {
+        if (!project.hasProperty("skipDockerCheck") && !dockerIsReachable()) {
+            throw GradleException(
+                "\n" +
+                    "Docker is not reachable, so the integration tests cannot run.\n\n" +
+                    "This is an environment problem, not a test failure. Without this check every\n" +
+                    "test that needs PostgreSQL or Redpanda fails with the same cause and its own\n" +
+                    "stack trace.\n\n" +
+                    "To fix it:\n" +
+                    "    start the Docker daemon\n" +
+                    "    docker info        # should print a server version\n" +
+                    "    ./gradlew test     # re-run\n\n" +
+                    "To run only the unit tests without a daemon:\n" +
+                    "    ./gradlew test -PskipDockerCheck --tests '*SomeUnitTest*'\n\n" +
+                    "See \"Local development only\" in the README's Known limitations.\n",
+            )
+        }
+    }
 }
+
+/** True when a Docker daemon answers. Any failure to ask counts as "no". */
+fun dockerIsReachable(): Boolean =
+    try {
+        ProcessBuilder("docker", "info")
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+            .waitFor() == 0
+    } catch (e: Exception) {
+        false
+    }
 
 tasks.withType<JavaCompile> {
     options.compilerArgs.add("-parameters")
