@@ -288,6 +288,29 @@ Several tests are written to fail for the right reason rather than merely to pas
   with distinct keys and one `client_order_id`. A check-then-insert with a race in it passes every
   sequential idempotency test in the suite; these are the two that fail it.
 
+### The one test that talks to Binance
+
+```bash
+export BINANCE_TESTNET_API_KEY=...        # from the Binance Spot Testnet portal
+export BINANCE_TESTNET_API_SECRET=...
+make testnet-check
+```
+
+Everything else in this suite runs offline against a fake venue, because three of Phase 3's four
+acceptance criteria cannot be produced on a real exchange — you cannot ask Binance to drop your socket
+after the second fill. The cost of that choice is that a misunderstanding of the protocol gets
+reproduced in the double and then confirmed by the tests.
+
+So the work is divided ([ADR-0009](docs/adr/0009-fake-venue-and-the-real-endpoint.md)): the fake venue
+proves **behaviour**, and this one command proves **protocol** — that the signature algorithm is right,
+that the error codes mean what the fixtures say, and that the recorded payloads still match what the
+venue sends. It is skipped without credentials and never runs in CI, so a green build says nothing
+about the wire format. That is a real gap and it is why the command exists rather than being implied.
+
+Keys belong in a local `.env`. They are not in this repository and have never been in the environment
+it was built in — which is also why this particular test has never been executed: see its class comment
+before reading its first failure as a protocol difference.
+
 A **verifying consumer** (`OrderEventVerifier`) reads the published topic back and records each
 `event_id`. It is not a product feature: it exists so that the delivery guarantees in ADR-0006 are
 *tested* rather than asserted, and it is the model Phase 4's reconciliation consumer follows. Its

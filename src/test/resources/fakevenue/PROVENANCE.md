@@ -23,6 +23,12 @@ the same class of evidence as the rest of `binance-citations.md`. A capture is w
 first `make testnet-check` run with real credentials should replace these and commit the diff — and if
 that diff is not empty, the gap between the two is the thing to read carefully.
 
+That command now exists. It writes what the venue actually sent to `build/captured-fixtures/` and
+prints the two directions of difference: fields the venue sends that the fixture does not model, and
+fields the fixture carries that this particular response omitted. Only the first direction fails the
+test — the second may simply be a conditional field, and deciding that from one sample would be the
+wrong call. Promoting a capture into this directory is a deliberate commit of its own.
+
 ## Every edit made to the source text, itemised
 
 The documented examples are **not valid JSON**, so converting them was not mechanical. Each change is
