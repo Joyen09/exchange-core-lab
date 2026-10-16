@@ -82,6 +82,20 @@ public final class FakeBinanceVenue implements AutoCloseable {
     private final AtomicLong tradeIds = new AtomicLong(1_650_422_481L);
     private final AtomicLong clock = new AtomicLong(1_660_801_715_639L);
     private final AtomicInteger usedWeight = new AtomicInteger();
+    private final VenueStream stream = new VenueStream();
+    /**
+     * What the venue did, in order, so an ordering can be asserted instead of inferred from clocks.
+     *
+     * <p>The client-side alternative — compare when the frame arrived against when the HTTP call
+     * returned — is two different TCP connections, so nothing guarantees their relative order and the
+     * test would be flaky in the one direction that matters. What is actually under test is whether
+     * the double <em>can</em> emit the report first; that is a property of this object, and this is
+     * where it is observable.
+     */
+    private final java.util.List<String> actions = java.util.Collections.synchronizedList(new ArrayList<>());
+    private final AtomicLong listenKeys = new AtomicLong();
+    private volatile String listenKey;
+    private volatile boolean reportBeforeResponse;
 
     public FakeBinanceVenue(VenueScript script) {
         this.script = script;
@@ -93,6 +107,7 @@ public final class FakeBinanceVenue implements AutoCloseable {
         server.createContext("/api/v3/order", this::handleOrder);
         server.createContext("/api/v3/openOrders", this::handleOpenOrders);
         server.createContext("/api/v3/myTrades", this::handleMyTrades);
+        server.createContext("/api/v3/userDataStream", this::handleUserDataStream);
         server.start();
     }
 
@@ -132,9 +147,11 @@ public final class FakeBinanceVenue implements AutoCloseable {
             throw new IllegalStateException("no such order at the venue: " + clientOrderId);
         }
         long at = clock.addAndGet(1_000);
-        ordersByClientOrderId.put(clientOrderId, order.withFill(quantity, price, at));
-        trades.add(new VenueTrade(
-                order.symbol(), tradeIds.getAndIncrement(), order.orderId(), quantity, price, at));
+        VenueOrder filled = order.withFill(quantity, price, at);
+        ordersByClientOrderId.put(clientOrderId, filled);
+        long tradeId = tradeIds.getAndIncrement();
+        trades.add(new VenueTrade(order.symbol(), tradeId, order.orderId(), quantity, price, at));
+        pushReport(filled, "TRADE", quantity, price, tradeId);
     }
 
     public synchronized VenueOrder orderOf(String clientOrderId) {
@@ -149,8 +166,37 @@ public final class FakeBinanceVenue implements AutoCloseable {
         return usedWeight.get();
     }
 
+    /** What this venue did, in order: {@code push:<clientOrderId>} and {@code respond:<clientOrderId>}. */
+    public java.util.List<String> actions() {
+        return java.util.List.copyOf(actions);
+    }
+
+    /** The user data stream, for tests that drive it directly. */
+    public VenueStream stream() {
+        return stream;
+    }
+
+    /** The key the stream currently accepts, or null before one has been created. */
+    public String currentListenKey() {
+        return listenKey;
+    }
+
+    /**
+     * Makes the venue deliver the execution report <em>before</em> the REST response returns.
+     *
+     * <p>ADR-0009's third way of being fooled: a double whose timing differs qualitatively from the
+     * venue's. The natural implementation answers the HTTP call and then pushes the event, and a client
+     * built against only that ordering has a race nobody has looked for. "The double is deterministic"
+     * must not come to mean "the double only ever does the convenient thing", so the inconvenient
+     * ordering is available and at least one test uses it.
+     */
+    public void deliverReportBeforeResponse(boolean enabled) {
+        this.reportBeforeResponse = enabled;
+    }
+
     @Override
     public void close() {
+        stream.close();
         server.stop(0);
     }
 
@@ -176,6 +222,34 @@ public final class FakeBinanceVenue implements AutoCloseable {
 
     private void handleMyTrades(HttpExchange exchange) throws IOException {
         guarded(exchange, "GET /api/v3/myTrades", 20, this::myTrades);
+    }
+
+    private void handleUserDataStream(HttpExchange exchange) throws IOException {
+        // Keyed by API key alone — this family of endpoints is not signed, which is itself a protocol
+        // fact worth modelling rather than smoothing over.
+        if (!FakeBinanceVenue.API_KEY.equals(exchange.getRequestHeaders().getFirst("X-MBX-APIKEY"))) {
+            error(exchange, 401, -2015, "Invalid API-key, IP, or permissions for action.");
+            return;
+        }
+        switch (exchange.getRequestMethod()) {
+            case "POST" -> {
+                listenKey = "listen-key-" + listenKeys.incrementAndGet();
+                stream.expect(listenKey);
+                respond(exchange, 200, "{\"listenKey\":\"%s\"}".formatted(listenKey));
+            }
+            case "PUT" -> {
+                // Renewal. The venue answers {} and the key keeps working; a client that stops
+                // renewing finds out sixty minutes later, which is why the adapter renews at thirty.
+                respond(exchange, 200, "{}");
+            }
+            case "DELETE" -> {
+                listenKey = null;
+                stream.expect(null);
+                stream.drop();
+                respond(exchange, 200, "{}");
+            }
+            default -> error(exchange, 405, -1121, "Method not allowed.");
+        }
     }
 
     /** Everything every authenticated route must do before it does anything of its own. */
@@ -243,7 +317,25 @@ public final class FakeBinanceVenue implements AutoCloseable {
                 at,
                 at);
         ordersByClientOrderId.put(clientOrderId, order);
+
+        if (reportBeforeResponse) {
+            pushReport(order, "NEW", BigDecimal.ZERO, BigDecimal.ZERO, -1L);
+            respondToPlace(exchange, order);
+        } else {
+            respondToPlace(exchange, order);
+            pushReport(order, "NEW", BigDecimal.ZERO, BigDecimal.ZERO, -1L);
+        }
+    }
+
+    private void respondToPlace(HttpExchange exchange, VenueOrder order) throws IOException {
         respond(exchange, 200, render(order).json());
+        actions.add("respond:" + order.clientOrderId());
+    }
+
+    private void pushReport(
+            VenueOrder order, String executionType, BigDecimal lastQty, BigDecimal lastPrice, long tradeId) {
+        stream.push(executionReport(order, executionType, lastQty, lastPrice, tradeId));
+        actions.add("push:" + order.clientOrderId());
     }
 
     private synchronized void queryOrder(HttpExchange exchange, Map<String, String> query) throws IOException {
@@ -320,6 +412,40 @@ public final class FakeBinanceVenue implements AutoCloseable {
                 .with("updateTime", order.updatedAt())
                 .with("isWorking", !order.isTerminal())
                 .with("workingTime", order.createdAt());
+    }
+
+    /**
+     * One {@code executionReport}, built from the recorded payload like everything else here.
+     *
+     * <p>{@code t} is the venue's trade id for a fill and <b>-1 for anything else</b>, which is not a
+     * placeholder: it is the sentinel that makes {@code CHECK (trade_id >= 0)} necessary and that
+     * {@code TradeSnapshot} refuses. Emitting it faithfully is the point — a double that sent a
+     * plausible id for a NEW event would hide the defect the real venue would eventually produce.
+     */
+    private String executionReport(
+            VenueOrder order, String executionType, BigDecimal lastQuantity, BigDecimal lastPrice, long tradeId) {
+        return VenueResponse.from(VenueFixtures.executionReport())
+                .with("E", order.updatedAt())
+                .with("s", order.symbol())
+                .with("c", order.clientOrderId())
+                .with("S", order.side())
+                .with("o", order.type())
+                .with("f", order.timeInForce())
+                .with("q", order.quantity().toPlainString())
+                .with("p", order.price().toPlainString())
+                .with("x", executionType)
+                .with("X", order.status())
+                .with("i", order.orderId())
+                .with("l", lastQuantity.toPlainString())
+                .with("z", order.executedQuantity().toPlainString())
+                .with("L", lastPrice.toPlainString())
+                .with("T", order.updatedAt())
+                .with("t", tradeId)
+                .with("O", order.createdAt())
+                .with("Z", order.cumulativeQuote().toPlainString())
+                .with("Y", lastQuantity.multiply(lastPrice).toPlainString())
+                .with("W", order.createdAt())
+                .json();
     }
 
     private VenueResponse renderTrade(VenueTrade trade) {
