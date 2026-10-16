@@ -23,23 +23,67 @@ the same class of evidence as the rest of `binance-citations.md`. A capture is w
 first `make testnet-check` run with real credentials should replace these and commit the diff — and if
 that diff is not empty, the gap between the two is the thing to read carefully.
 
-## What had to be changed to make them parse, and why that is a risk
+## Every edit made to the source text, itemised
 
-The documented examples are **not valid JSON**. Converting them was not mechanical, and each change is a
-place where a reading of the document entered the fixture:
+The documented examples are **not valid JSON**, so converting them was not mechanical. Each change is
+listed so that the next person comparing a fixture against the document knows where a difference came
+from, rather than thinking they have found something.
 
-1. **`//` comments stripped.** The examples annotate fields inline. Removing them is safe.
-2. **A missing comma repaired.** In the *Query order* example the line
-   `"origQuoteOrderQty": "0.00000000"` is followed by `"strategyId"` with no separating comma — a typo in
-   the published document.
-3. **Conditional fields omitted.** The example marks `trailingDelta`, `trailingTime`, `strategyId`,
-   `strategyType`, `preventedMatchId` and `preventedQuantity` as "present only if…". They are left out,
-   because including them would assert they are always sent, which the document says they are not.
+### `order.json` — from lines 115331–115358
 
-Item 3 is the one that could bite. It is a judgement about when a field appears, made from prose, and a
-wrong judgement here produces a fixture the adapter parses happily and a real response it does not. That
-is the **meaning** half of ADR-0009's item 1, in miniature, and no mechanism in this repository closes
-it — only the capture in the first paragraph would.
+| Edit | Source line | Why |
+|---|---|---|
+| unwrapped from `"result": { … }` | 115331, 115358 | the WebSocket API nests the order inside a response envelope; `GET /api/v3/order` returns the object bare |
+| removed `//` comments | 115334, 115344–115349, 115352–115354, 115356–115357 | not JSON |
+| **inserted a missing comma** after `"origQuoteOrderQty": "0.00000000"` | 115352 | a typo in the published document: line 115353 begins a new field with no separator |
+| omitted `trailingDelta`, `trailingTime` | 115345–115346 | marked *"present only if trailingDelta set for the order"* |
+| omitted `strategyId`, `strategyType` | 115353–115354 | marked *"present only if … set for the order"* |
+| omitted `preventedMatchId`, `preventedQuantity` | 115356–115357 | marked *"present only if the order expired due to STP"* |
+
+Kept, because the document calls them always present: `stopPrice`, `icebergQty`, `origQuoteOrderQty`.
+Field order is the document's, with the omitted lines closed up.
+
+### `myTrades.json` — from lines 115900–115935
+
+| Edit | Why |
+|---|---|
+| unwrapped from `"result": [ … ]` | same envelope difference as above |
+| kept both array elements | one trade would not show that a single order produces several, which is what the partial-fill tests are about |
+
+No comments to strip and no fields omitted: the trade object as documented is complete and
+unconditional. Note what is *not* there — no `clientOrderId`, no `origClientOrderId`. That absence is
+load-bearing and `VenueFixturesTest` asserts it.
+
+### `executionReport.json` — from line 116663
+
+| Edit | Why |
+|---|---|
+| removed `//` comments | not JSON |
+| **unwrapped from `{"subscriptionId": 0, "event": { … }}`** | see the warning below — this is the least certain edit here |
+
+Nothing was omitted; the conditional fields listed under *"Conditional Fields in Execution Report"* were
+simply not in the example.
+
+## An open protocol question, recorded rather than resolved
+
+**The envelope of `executionReport` depends on which transport delivers it, and the two are documented
+unevenly.**
+
+- Both user-data-stream pages — production and testnet — show the payload wrapped in
+  `{"subscriptionId": 0, "event": { … }}`. That is the **WebSocket API subscription** transport, where
+  a client subscribes over an authenticated connection.
+- Phase 3 chose the **classic** transport: `POST /api/v3/userDataStream` for a listenKey, renewed every
+  thirty minutes, consumed at `/ws/{listenKey}`. That one delivers the event **bare**.
+
+In the vendored extract, the only bare examples are in `/products/spot/faqs/market_orders_faq` (lines
+130998, 131034, 131070, 131106). So the fixture here is unwrapped — which matches the transport the
+project is building against — but it was produced by *removing* an envelope from an example of a
+different transport, rather than copied from an example of the right one.
+
+The FAQ examples corroborate the shape. They are an FAQ, which is weaker evidence than a reference
+page, and that is the honest status: **the bare envelope is corroborated, not attested.** The first
+`make testnet-check` against a real listenKey settles it in one line of output, and until then this
+paragraph is the citation.
 
 ## Rules
 

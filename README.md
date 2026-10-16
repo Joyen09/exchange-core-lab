@@ -525,7 +525,7 @@ Honest list, expanded as the project grows:
    would assume one active writer. It does not, and a test runs two publishers against forty
    messages to show it.) Everything else still assumes one process.
 7. **Local development only.** No Kubernetes manifests, no deployment automation, no remote host. The test
-   suite also needs a Docker daemon that stays up: it crashed five times while this phase was being
+   suite also needs a Docker daemon that stays up: it crashed six times while this phase was being
    built, each time turning the whole integration suite red at once — around seventy failures, all of
    them `DockerClientProviderStrategy` unable to find a strategy rather than anything about the code.
    The build now checks for a reachable daemon before any test runs and stops with one message saying
