@@ -346,6 +346,41 @@ happened. An ADR arguing for citations, written without one, is the strongest av
 the discipline has to be mechanical — knowing the rule and believing it is not enough, including for
 whoever is writing the rule down.
 
+### It happened a second time, after the rule was written down
+
+Building the fixtures found that `TradeSnapshot` required a `clientOrderId`. **No Binance trade object
+carries one** — the WebSocket `executionReport` has both identifiers, but the REST trade list has only
+`orderId`, so `fetchTrades` could not have been implemented without fabricating a value. The interface
+had specified a shape the API does not produce.
+
+That is the same error as `fetchOrder(ClientOrderId)`, and the pair is worth naming as a class rather
+than as two mistakes:
+
+> **A clean domain interface and an implementable domain interface are independent properties.**
+
+The first is mechanically checkable, and this project checks it: an ArchUnit rule confirms that no
+Binance vocabulary escapes the adapter, and it was itself probed against a deliberate violation. The
+rule passed in both cases above — correctly. `fetchOrder(ClientOrderId)` leaks nothing. `TradeSnapshot`
+leaks nothing. Both are clean, and neither could be built.
+
+The second property has no equivalent check. Nothing in a type signature says whether the venue will
+give you the inputs or return the outputs; only touching the wire format does. Both defects surfaced at
+exactly that moment — one while implementing the interface, one while building its fixtures — and
+neither could have surfaced earlier, because nothing earlier touched a payload.
+
+#### So it becomes an ordering rule, not a lesson
+
+> **A fixture must exist before an interface method is final.**
+
+Not "write the interface, then build fixtures for it". The fixture is what demonstrates that the
+method's inputs and outputs are available in the wire format at all; until one exists, the signature is
+a proposal. Both defects above would have been caught at the point of writing the fixture rather than
+after the interface was merged.
+
+This sits underneath the project's spec-first habit rather than competing with it. The specification
+decides *what* the system does; this decides whether the shape chosen to do it can exist. They fail
+differently and they are caught at different moments.
+
 And reading it immediately produced a detail neither of us had:
 
 > `"t": -1,  // Trade ID`

@@ -93,6 +93,9 @@ public interface ExchangeClient {
      * @param since inclusive lower bound. Callers are expected to overlap it deliberately — ADR-0011
      *     rewinds five minutes, because fetching a trade twice costs a discarded row and missing one
      *     costs a permanent accounting error.
+     * @return snapshots whose {@code clientOrderId} is {@code null}: the venue's trade endpoints carry
+     *     only its own order id. The caller maps it back through the venue order id recorded when the
+     *     order was submitted.
      */
     List<TradeSnapshot> fetchTrades(Symbol symbol, Instant since);
 }

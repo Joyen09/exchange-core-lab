@@ -429,10 +429,20 @@ The section above is about **prevention** — how the system is built so a mista
 This one is about **verification**, and it is a separate idea that happens to have come up just as
 often: how do you know a thing you believe is actually true?
 
-Four times in this project, something looked like confirmation and was confirming a different claim:
+The cleanest specimen first, because it takes one sentence:
+
+> A probe edited a file with `sed`, the delimiter collided with a `|` in the replacement, `sed` exited
+> with an error, the file was never modified — **and the test passed.** Read as evidence, that green
+> meant "the rule holds against a deliberate violation". It meant the violation had not happened.
+>
+> **You can believe you are testing something while testing a change that was never made.**
+
+That is the whole pattern, and it has turned up five times here, each time taking longer to explain
+than the last:
 
 | What happened | What looked like evidence | What it actually established |
 |---|---|---|
+| a `sed` probe failed silently | the test passed, so "the rule catches violations" | that nothing had been violated |
 | `executionReport` sets `t` to `-1` for non-fill events | a protocol constant everyone had reasoned their way to | that nobody had read the primary source |
 | the `-2010` error table | an error table whose contents matched | that a copy under `/products/wallet/` agrees by coincidence, not by authority |
 | the V5 migration's validation pass | "it ran without aborting" | possibly that it was checking the wrong thing |
@@ -515,7 +525,7 @@ Honest list, expanded as the project grows:
    would assume one active writer. It does not, and a test runs two publishers against forty
    messages to show it.) Everything else still assumes one process.
 7. **Local development only.** No Kubernetes manifests, no deployment automation, no remote host. The test
-   suite also needs a Docker daemon that stays up: it crashed five times while this phase was being
+   suite also needs a Docker daemon that stays up: it crashed six times while this phase was being
    built, each time turning the whole integration suite red at once — around seventy failures, all of
    them `DockerClientProviderStrategy` unable to find a strategy rather than anything about the code.
    The build now checks for a reachable daemon before any test runs and stops with one message saying

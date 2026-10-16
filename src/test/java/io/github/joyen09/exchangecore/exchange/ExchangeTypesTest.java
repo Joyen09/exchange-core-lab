@@ -46,6 +46,38 @@ class ExchangeTypesTest {
         }
 
         @Test
+        @DisplayName("needs the venue's order id, and tolerates the absence of ours")
+        void venueOrderIdIsTheRequiredIdentifier() {
+            // The REST trade list carries only orderId — no Binance trade object has a client order id
+            // (docs/vendor/binance-citations.md). Requiring ours would make fetchTrades impossible to
+            // implement without fabricating a value.
+            assertThatCode(() -> new TradeSnapshot(
+                            Symbol.of("BTCUSDT"),
+                            1,
+                            null,
+                            VenueOrderId.of(9),
+                            BigDecimal.ONE,
+                            new BigDecimal("60000"),
+                            null,
+                            null,
+                            Instant.EPOCH))
+                    .doesNotThrowAnyException();
+
+            assertThatThrownBy(() -> new TradeSnapshot(
+                            Symbol.of("BTCUSDT"),
+                            1,
+                            ClientOrderId.of("c-1"),
+                            null,
+                            BigDecimal.ONE,
+                            new BigDecimal("60000"),
+                            null,
+                            null,
+                            Instant.EPOCH))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("venueOrderId is the only identifier");
+        }
+
+        @Test
         @DisplayName("commission and its asset travel together or not at all")
         void commissionIsAllOrNothing() {
             assertThatThrownBy(() -> new TradeSnapshot(
