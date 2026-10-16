@@ -437,18 +437,23 @@ The cleanest specimen first, because it takes one sentence:
 >
 > **You can believe you are testing something while testing a change that was never made.**
 
-That is the whole pattern, and it has turned up five times here, each time taking longer to explain
+That is the whole pattern, and it has turned up six times here, each time taking longer to explain
 than the last:
 
 | What happened | What looked like evidence | What it actually established |
 |---|---|---|
 | a `sed` probe failed silently | the test passed, so "the rule catches violations" | that nothing had been violated |
+| a build gate stopped the run | `build/test-results` said 299 tests, 0 failures | that the *previous* run had passed; nothing ran this time |
 | `executionReport` sets `t` to `-1` for non-fill events | a protocol constant everyone had reasoned their way to | that nobody had read the primary source |
 | the `-2010` error table | an error table whose contents matched | that a copy under `/products/wallet/` agrees by coincidence, not by authority |
 | the V5 migration's validation pass | "it ran without aborting" | possibly that it was checking the wrong thing |
 | the migration's abort message | a green `hasMessageContaining` assertion | that one fragment of the message matched — the count in it was wrong, and nobody saw |
 
-The shape is identical every time: **a check passes, and what it checked is not the claim being made.**
+Those two are a pair, and between them they cover the ways a green can lie: the first is **a change
+that never happened**, the second is **a run that never happened**. Neither leaves a mark. The rest of
+the table is the same shape with more words:
+
+**a check passes, and what it checked is not the claim being made.**
 The guard-registration bug in [the section below](#the-most-useful-bug-in-this-repository) is the same
 shape and the most expensive instance of it — a test asserted *that* startup failed, nobody asserted
 *where*, and the two are different claims.
