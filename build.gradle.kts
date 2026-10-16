@@ -89,10 +89,18 @@ tasks.withType<Test> {
     }
 }
 
-/** True when a Docker daemon answers. Any failure to ask counts as "no". */
+/**
+ * True when a Docker daemon answers.
+ *
+ * The criterion itself is in scripts/docker-available.sh, not here. It had been written out twice —
+ * once in this file and once in DockerPreflight — and two statements of one rule drift: a timeout
+ * changed on one side, or a version requirement added, and the IDE and the command line start
+ * disagreeing about whether the tests can run. One file, three callers.
+ */
 fun dockerIsReachable(): Boolean =
     try {
-        ProcessBuilder("docker", "info")
+        ProcessBuilder("sh", "scripts/docker-available.sh")
+            .directory(rootDir)
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()

@@ -11,7 +11,7 @@ build: ## Compile and package the application
 	$(GRADLE) bootJar
 
 test: ## Run the full test suite (needs a Docker daemon for Testcontainers)
-	@docker info > /dev/null 2>&1 || { \
+	@./scripts/docker-available.sh || { \
 		echo "Docker is not reachable. Start the daemon and re-run — the integration tests"; \
 		echo "cannot run without it, and would otherwise fail ~70 times with the same cause."; \
 		exit 1; }

@@ -401,6 +401,28 @@ bypassed. That is the trade, and it is taken on purpose — see
 [the most useful bug in this repository](#the-most-useful-bug-in-this-repository) for what the
 alternative looked like when it failed.
 
+### When a door *is* allowed, and the test for it
+
+A principle with no stated exception gets used in one of two wrong ways: applied mechanically where it
+does not belong, or thrown out entirely at the first case where it obviously does not fit. So the
+exception is written down.
+
+Not every control here is absolute. `./gradlew test -PskipDockerCheck` bypasses the Docker gate, on
+purpose, for someone running only the unit tests. The endpoint allowlist has no equivalent and never
+will. The difference is not importance or taste:
+
+> **The cost of a back door is whatever happens on the other side of it.**
+
+Behind the endpoint allowlist is a live exchange with real money. Going through that door is
+*irreversible* and the damage is invisible until later. Behind the Docker gate are some tests that
+will not run. Going through that door fails immediately, visibly, and costs a re-run.
+
+So the test for an escape hatch is: **if someone takes it by mistake, do they find out straight away,
+and can they undo it?** Two yeses, a flag is fine. One no, make it impossible to express. The
+guardrail this project is partly built to demonstrate is a two-no case, which is why it has no switch,
+no profile and no environment variable, and why a test scans the repository for anything that could
+become one.
+
 ## The other principle: what counts as evidence
 
 The section above is about **prevention** — how the system is built so a mistake cannot be written.
