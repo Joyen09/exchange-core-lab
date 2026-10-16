@@ -17,6 +17,26 @@ test: ## Run the full test suite (needs a Docker daemon for Testcontainers)
 		exit 1; }
 	$(GRADLE) test
 
+testnet-check: ## Verify protocol facts against the real Binance Spot Testnet (needs your own keys)
+	@test -n "$$BINANCE_TESTNET_API_KEY" || { \
+		echo "BINANCE_TESTNET_API_KEY is not set, so there is nothing to check."; \
+		echo ""; \
+		echo "Get a key pair from the Binance Spot Testnet portal, then:"; \
+		echo "    export BINANCE_TESTNET_API_KEY=..."; \
+		echo "    export BINANCE_TESTNET_API_SECRET=..."; \
+		echo "    make testnet-check"; \
+		echo ""; \
+		echo "Keys belong in a local .env. Never in this repository, never in a cloud session."; \
+		exit 1; }
+	@test -n "$$BINANCE_TESTNET_API_SECRET" || { \
+		echo "BINANCE_TESTNET_API_KEY is set but BINANCE_TESTNET_API_SECRET is not."; exit 1; }
+	$(GRADLE) test -PskipDockerCheck --tests '*BinanceTestnetProtocolIT*' --info \
+		| grep -v '^\[testnet-check\] *$$' || true
+	@echo ""
+	@echo "Captures, if any, are in build/captured-fixtures/."
+	@echo "Promoting one into src/test/resources/fakevenue/ is a deliberate commit of its own —"
+	@echo "see docs/vendor/README.md for why."
+
 up: ## Start the whole stack in the background
 	$(COMPOSE) up -d --build
 
