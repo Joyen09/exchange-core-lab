@@ -30,10 +30,23 @@ testnet-check: ## Verify protocol facts against the real Binance Spot Testnet (n
 		exit 1; }
 	@test -n "$$BINANCE_TESTNET_API_SECRET" || { \
 		echo "BINANCE_TESTNET_API_KEY is set but BINANCE_TESTNET_API_SECRET is not."; exit 1; }
+	@rm -rf build/captured-fixtures
 	$(GRADLE) test -PskipDockerCheck --tests '*BinanceTestnetProtocolIT*' --info \
 		| grep -v '^\[testnet-check\] *$$' || true
 	@echo ""
-	@echo "Captures, if any, are in build/captured-fixtures/."
+	@test -f build/captured-fixtures/order.json || { \
+		echo "======================================================================"; \
+		echo "The fixture comparison did NOT run."; \
+		echo ""; \
+		echo "Signatures and error codes were checked, but order.json was never"; \
+		echo "compared against a live response — there were no open BTCUSDT orders"; \
+		echo "to compare it with. This command has not verified the fixtures."; \
+		echo ""; \
+		echo "Place a limit order on the testnet that will not fill (a BUY well"; \
+		echo "below the bid, or a SELL well above the ask) and run this again."; \
+		echo "======================================================================"; \
+		exit 1; }
+	@echo "Captures are in build/captured-fixtures/."
 	@echo "Promoting one into src/test/resources/fakevenue/ is a deliberate commit of its own —"
 	@echo "see docs/vendor/README.md for why."
 
