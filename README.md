@@ -460,7 +460,7 @@ The cleanest specimen first, because it takes one sentence:
 >
 > **You can believe you are testing something while testing a change that was never made.**
 
-That is the whole pattern, and it has turned up seven times here:
+That is the whole pattern, and it has turned up eight times here:
 
 | What happened | What looked like evidence | What it actually established |
 |---|---|---|
@@ -471,8 +471,34 @@ That is the whole pattern, and it has turned up seven times here:
 | the V5 migration's validation pass | "it ran without aborting" | possibly that it was checking the wrong thing |
 | the migration's abort message | a green `hasMessageContaining` assertion | that one fragment of the message matched — the count in it was wrong, and nobody saw |
 | `firstArrival < System.nanoTime()` | a passing assertion about event ordering | nothing: it is true whenever any event arrived. The first one here found by reading a diff rather than by running something |
+| the fixture-vs-reality check, against an account with no open orders | a green test named *"the open-orders response carries the fields our fixture claims it does"* | that there was nothing to compare. It said *the fixture matches* and meant *I did not look* — and this is the mechanism ADR-0009 leans on to close its first risk |
 
-Those two are a pair, and between them they cover the ways a green can lie: the first is **a change
+### The pattern produces false reds too, and those are worse
+
+Everything above is a false green: evidence too weak to support *"no problem here"*. The first
+counter-example came from the real exchange. A test named *"myTrades still refuses a request without a
+symbol"* failed with `-1101 TOO_MANY_PARAMETERS` where `-1102` was expected — which reads as a genuine
+protocol difference, the exact kind this command exists to surface.
+
+It was not. The helper appended `recvWindow` to a query that already had one, and the venue rejected
+the duplicate **before it ever looked at the missing symbol**. The test had never sent the request its
+name described.
+
+A false red is the more dangerous half:
+
+- **A false green makes you do nothing. A false red makes you do the wrong thing** — and it spends your
+  most attentive hour doing it. The natural response here was to change the fake venue's constant to
+  `-1101` so the two agreed, which would have broken something that was correct.
+- **It ends in a record that looks rigorous.** This project requires a documentation line number in any
+  commit that changes the test double. That commit would have had one — a real citation, attached to a
+  wrong conclusion. **A later reader stops doubting a conclusion that cites a source**, so the usual
+  correction never arrives.
+
+The habit that caught it was asking what the request actually looked like on the wire before changing
+anything to match the answer.
+
+
+The first two rows are a pair, and between them they cover the ways a green can lie: the first is **a change
 that never happened**, the second is **a run that never happened**. Neither leaves a mark. The rest of
 the table is the same shape with more words:
 
