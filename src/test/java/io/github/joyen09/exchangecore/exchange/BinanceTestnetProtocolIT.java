@@ -104,11 +104,23 @@ class BinanceTestnetProtocolIT {
     void aDeliberateProtocolViolationIsStillRefused() throws Exception {
         // ADR-0009's second way of being fooled: a double more forgiving than the venue. The fake
         // refuses this with -1102; this confirms the venue does too, rather than that we assumed so.
-        HttpResponse<String> response = signedGet("/api/v3/myTrades", "recvWindow=5000");
+        //
+        // Nothing else may be sent. The first version of this test passed recvWindow explicitly, the
+        // helper added a second one, and -1101 came back for the duplicate — a refusal that says
+        // nothing about the missing symbol.
+        HttpResponse<String> response = signedGet("/api/v3/myTrades", null);
 
         assertThat(response.statusCode()).isEqualTo(400);
         JsonNode error = JSON.readTree(response.body());
-        assertThat(error.get("code").asInt()).isEqualTo(-1102);
+
+        assertThat(error.get("code").asInt())
+                .as("the fake venue answers -1102 for a symbol-less myTrades; the real one answered "
+                        + "%d (%s). If these differ, the FAKE is wrong and must be corrected, citing "
+                        + "the document line in the commit message per ADR-0009. Do not change this "
+                        + "assertion to match: the venue is the authority, and the fake is the thing "
+                        + "being checked.",
+                        error.get("code").asInt(), error.get("msg").asText())
+                .isEqualTo(-1102);
         assertThat(error.get("msg").asText()).contains("symbol");
     }
 
@@ -119,12 +131,24 @@ class BinanceTestnetProtocolIT {
         JsonNode orders = JSON.readTree(response.body());
 
         if (orders.isEmpty()) {
-            // Nothing to compare against. Not a failure — place an order on the testnet and re-run if
-            // the comparison is what you came for.
-            System.out.println("""
-                    [testnet-check] no open BTCUSDT orders, so the order fixture was not compared.
-                                    Place one on the testnet and re-run to exercise this.""");
-            return;
+            // Aborted, not passed. This test exists to compare a fixture against reality, and with
+            // nothing to compare it has not done that — but an earlier version returned quietly here
+            // and reported green, which said "the fixture matches" when it meant "I did not look".
+            //
+            // That is the ninth time in this project that a check passed while checking nothing, and
+            // the worst-placed one: this is the mechanism ADR-0009 relies on to close the shape half
+            // of its first risk. skipped and passed are different states in the report, and passed
+            // was the wrong one.
+            org.junit.jupiter.api.Assumptions.abort("""
+                    No open BTCUSDT orders, so the fixture was NOT compared against reality.
+
+                    This run has not verified order.json. To make it do so, place a limit order on \
+                    the testnet that will not fill — far from the market — and run again:
+
+                        a BUY well below the bid, or a SELL well above the ask
+
+                    make testnet-check fails if this comparison did not run, so a skipped check does \
+                    not quietly become a successful command.""");
         }
 
         JsonNode live = orders.get(0);
@@ -170,9 +194,29 @@ class BinanceTestnetProtocolIT {
                 StandardCharsets.UTF_8);
     }
 
+    /**
+     * Signs and sends a request. The caller supplies <em>endpoint</em> parameters only.
+     *
+     * <p>{@code recvWindow}, {@code timestamp} and {@code signature} are added here, exactly once. An
+     * earlier version let the caller pass {@code recvWindow} as well, and the resulting duplicate was
+     * rejected with {@code -1101 TOO_MANY_PARAMETERS} — "Duplicate values for a parameter detected",
+     * {@code /products/spot/errors} line 24412 — <b>before the venue ever looked at what the test was
+     * about</b>. The test reported a protocol difference that did not exist.
+     *
+     * <p>Hence the guard below rather than a comment asking callers not to: the mistake produced a
+     * plausible-looking failure about something else entirely, which is the expensive kind.
+     */
     private static HttpResponse<String> signedGet(String path, String query) throws Exception {
-        String withTimestamp = query + "&timestamp=" + System.currentTimeMillis() + "&recvWindow=5000";
-        return get(path, withTimestamp + "&signature=" + sign(withTimestamp));
+        if (query != null && (query.contains("recvWindow") || query.contains("timestamp")
+                || query.contains("signature"))) {
+            throw new IllegalArgumentException(
+                    "signedGet supplies recvWindow, timestamp and signature itself. Passing one "
+                            + "duplicates it, and the venue rejects duplicates with -1101 before it "
+                            + "looks at anything else — so the request under test is never sent.");
+        }
+        String params = (query == null || query.isBlank() ? "" : query + "&")
+                + "recvWindow=5000&timestamp=" + System.currentTimeMillis();
+        return get(path, params + "&signature=" + sign(params));
     }
 
     private static HttpResponse<String> get(String path, String query) throws Exception {
